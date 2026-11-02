@@ -1,8 +1,10 @@
 #!/bin/zsh
 # Full app flow against two exFAT disk images, on a real file system, with real Sony clips.
 # SAMPLE_CARD is a Sony card folder, read only: SAMPLE_CARD=/path/to/card scripts/selftest.sh
-# No other volume is touched. The names are unique to this run, a name already mounted stops it, INGEST_ONLY_VOLUMES
-# fences the app in, and only this run's own images are detached. They mount in /Volumes because the app only looks there.
+# No other volume is opened or written to: macOS's list of volumes is all the app reads about them. The names are unique
+# to this run, a name already mounted stops it, INGEST_ONLY_VOLUMES fences the app in, and only this run's own images are
+# detached. They mount in /Volumes because the app only looks there. The app's preferences aren't fenced in: the test
+# clears its own working drive, camera memory and volume choices, as it always has.
 set -e
 SAMPLE="${SAMPLE_CARD:?set SAMPLE_CARD to a Sony card folder}"
 W=$(mktemp -d /tmp/ingest-selftest.XXXXXX)

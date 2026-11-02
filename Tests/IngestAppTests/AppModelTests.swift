@@ -1165,6 +1165,7 @@ extension AppModelTests {
         await w.model.matchCard(c)                  // the look that used to find C.JPG in Old, and call it done
         #expect(!c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict))")
         if case .verified(let at, _, _)? = c.states["DCIM/C.JPG"] { Issue.record("proved at \(at)") }
+        #expect(c.states["DCIM/C.JPG"] == .failed(FileState.nameTaken), "and it still says why")
         let sheet = CardSheet.make(c, model: w.model)
         #expect(sheet.bottom.title == "Don't format")
         #expect(!sheet.bottom.sentence.contains("only on this card"), "\(sheet.bottom.sentence)")
@@ -1197,6 +1198,7 @@ extension AppModelTests {
         #expect(!c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict))")
         #expect(c.filesToGo > 0)
         #expect(CardSheet.make(c, model: w.model).bottom.title == "Don't format")
+        #expect(CardSheet.make(c, model: w.model).bottom.sentence.hasSuffix("still to copy."), "they're on the drive, so they aren't only on the card")
         w.model.retry(c)
         await w.until("the rest") { c.phase == .finished && !c.isBusy }
         #expect(c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict))")

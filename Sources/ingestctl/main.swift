@@ -85,6 +85,12 @@ case "match":
 case "ingest":
     guard args.count == 4 else { die("ingestctl ingest <card> <drive> <drive-relative-dest>") }
     let root = args[1], drive = args[2], dest = args[3]
+    // The app's roots are whole volumes. Folders given here needn't be, and nothing may be written to a card's volume.
+    var cardStat = stat(), driveStat = stat()
+    guard stat(root, &cardStat) == 0, stat(drive, &driveStat) == 0, cardStat.st_dev != driveStat.st_dev else {
+        print("REFUSED: the card and the drive have to be different volumes")
+        exit(1)
+    }
     let read = CardReader.read(root: root, kind: kind)
     let ledger = Ledger(driveRoot: drive)
     let index = DriveIndex.scan(root: drive)

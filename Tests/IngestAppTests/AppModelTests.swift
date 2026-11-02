@@ -164,6 +164,7 @@ private final class ExFATDrive {
         let before = tree(image.root), one = FileManager.default.contents(atPath: image.root + "/Rushes/A082/one.bin")
         await w.model.addMissingFolders(c)
         #expect(c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict)) \(c.issues)")
+        #expect(w.model.notified.contains { $0.contains("safe to format") }, "\(w.model.notified)")
         let added = Set(tree(image.root)).subtracting(before)
         #expect(added == ["Rushes/A082/M4ROOT", "Rushes/A082/M4ROOT/GENERAL", "Rushes/A082/M4ROOT/GENERAL/LUT", "Rushes/A082/M4ROOT/SUB", "Rushes/A082/M4ROOT/TAKE",
                           "Rushes/A082/SONY", "Rushes/A082/SONY/PRO", "Rushes/A082/SONY/PRO/LUT"], "folders, and nothing else: \(added)")
@@ -260,6 +261,32 @@ private final class ExFATDrive {
         #expect(addButton(c, w) == nil, "a drive that won't confirm has a bigger problem")
         c.issues.removeLast()
         #expect(addButton(c, w) != nil)
+    }
+
+    @Test func `A card in two folders gets no button, because nothing says which`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        #expect(addButton(c, w) != nil)
+        c.states["one.bin"] = .verified(drivePath: "Elsewhere/one.bin", hash: "1", bytes: 1)
+        #expect(addButton(c, w) == nil)
+        await w.model.addMissingFolders(c)
+        #expect(!FileManager.default.fileExists(atPath: image.root + "/Elsewhere"))
+    }
+
+    @Test func `Something else gone wrong means no button`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        c.pendingDestination = Destination(footageRoot: "Rushes/A082")
+        c.error = "Not enough room."
+        #expect(addButton(c, w) == nil)
+    }
+
+    @Test func `A new drive forgets why a folder couldn't be added`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        c.folderError = "Couldn't add TAKE."
+        c.forgetDrive()
+        #expect(c.folderError == nil)
     }
 
     @Test func `A drive that changed adds nothing`() async throws {

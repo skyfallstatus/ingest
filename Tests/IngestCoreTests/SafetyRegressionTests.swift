@@ -1801,6 +1801,13 @@ private func provedStates(_ read: CardRead, in homes: (CardFile) -> String) -> [
     #expect(Pipeline.home(read: read, states: missing) == nil)
 }
 
+@Test func aOneFileCardRenamedOnTheDriveHasNoHome() {
+    let card = temp()
+    put(card + "/a.bin", rnd(10))
+    let read = CardReader.read(root: card, kind: kind)
+    #expect(Pipeline.home(read: read, states: ["a.bin": .verified(drivePath: "Shoot/A/renamed.bin", hash: "1", bytes: 10)]) == nil)
+}
+
 @Test func foldersLeadingOffTheDriveAreRefused() {
     let drive = temp()
     #expect(IngestEngine.addFolders(["../out", ".ingest/x"], home: "S", driveRoot: drive) == ["../out"])

@@ -19,7 +19,11 @@ import IngestCore
             // Just after a relaunch Sparkle looks for an unfinished install, and ignores a check while it does, so this asks until
             // something happens. A refused update goes back to idle, and is asked for again, which is what a real Mac would do.
             while true {
-                if model.updates.state == .idle { (model.updates.engine as? SparkleEngine)?.checkQuietly() }
+                if env["INGEST_UPDATE_MODE"] == "asked" {
+                    if model.updates.state != .checking { model.updates.check() }    // pressed by hand, so a refusal says why
+                } else if model.updates.state == .idle {
+                    (model.updates.engine as? SparkleEngine)?.checkQuietly()
+                }
                 try? await Task.sleep(for: .seconds(2))
                 if case .ready = model.updates.state { break }
             }

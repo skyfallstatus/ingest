@@ -122,10 +122,11 @@ package
 publish
 
 say_ "--- a feed that isn't signed"
-start plain
+start asked
 check "the old build launched" 'wait_for "^0.1 .* launched" 30'
 check "it was refused" 'wait_for "error:" 60'
 say_ "      $(grep -E "error:" $W/log | head -1 | cut -c1-110)"
+check "for its signature" 'grep "error:" $W/log | grep -qi "sign"'
 check "it never saw the update" '! grep -q "found 0.2" $W/log'
 check "the old version is still on disk" '[[ $(version) == 0.1 ]]'
 sign_feed

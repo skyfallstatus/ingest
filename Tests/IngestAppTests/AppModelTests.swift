@@ -418,6 +418,7 @@ private final class Dying: @unchecked Sendable {
         await w.until("the check") { !live.isScanning && !c.isMatching && c.phase == .ready && { if case .failed? = c.states["one.bin"] { true } else { false } }() }
         w.model.start(c, destination: Destination(footageRoot: "Sorted"))
         await w.until("the job") { !c.isBusy && c.phase != .queued && !c.isMatching && { if case .failed? = c.states["one.bin"] { true } else { false } }() }
+        await w.until("the rescan after it") { CardSheet.make(c, model: w.model).line(.readDrive)?.detail.isEmpty == false }
         return (c, bad)
     }
 
@@ -429,6 +430,7 @@ private final class Dying: @unchecked Sendable {
         let choose = try #require(sheet.line(.drive)?.actions.first { $0 == .chooseFolder }, "\(sheet.lines.map(\.actions))")
         #expect(choose.title == "Choose Folder…")
         #expect(sheet.line(.readDrive)?.detail.contains("Choose another folder, or remove the bad copy and copy again.") == true, "\(said(c, w))")
+        #expect(w.model.folderQuestion(c).contains("the rest of"), "what's proved stays put, so the card isn't kept whole")
 
         w.model.copy(c, into: "Elsewhere")      // what the button does once the panel has a folder
         await w.until("the copy") { c.phase == .finished && !c.isBusy }
@@ -439,6 +441,7 @@ private final class Dying: @unchecked Sendable {
     @Test func `Copy into a folder never lands on a name that's taken`() async throws {
         let w = Bench()
         let c = await w.ready()
+        #expect(w.model.folderQuestion(c).contains("kept whole"))
         try FileManager.default.createDirectory(atPath: w.a + "/Shoot/CARD", withIntermediateDirectories: true)
         await w.model.refresh()
         w.drive(w.driveA).index = DriveIndex.scan(root: w.a)
@@ -556,6 +559,22 @@ private final class Dying: @unchecked Sendable {
         #expect(foot.hasSuffix("not proved yet."), "\(foot)")
         #expect(!foot.contains("only on this card"))
         #expect(CardSheet.make(c, model: w.model).line(.drive)?.detail.first?.contains("was unplugged") == true, "it still says why until the drive is back")
+    }
+
+    // A pull can fail the job before the app hears the drive go, so the job has already ended by then.
+    @Test func `A job that ended just before the drive went keeps its reason and says nothing false`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        c.pendingDestination = Destination(footageRoot: "S")
+        c.error = "DRIVE-A was unplugged. Plug it back in to finish."
+        c.driveWentAway = true
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card)]
+        await w.model.refresh()
+        await w.until("no drive") { w.model.workingDrive == nil && c.phase == .ready && !c.isMatching }
+        #expect(c.error?.contains("unplugged") == true)
+        let foot = CardSheet.make(c, model: w.model).bottom.sentence
+        #expect(foot == "2 files not proved yet.", "\(foot)")
     }
 
     /// A copy under way, with the card pulled from under it.

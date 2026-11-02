@@ -15,7 +15,7 @@ import IngestCore
         panel.directoryURL = URL(fileURLWithPath: drive.path)
         panel.prompt = "Copy Here"
         guard FileManager.default.fileExists(atPath: card.volume.path) else { card.error = "\(card.name) isn't plugged in any more."; return }
-        panel.message = "Choose where \(card.name) goes on \(drive.name). The card is kept whole, in its own folder."
+        panel.message = model.folderQuestion(card)
         bar?.holdOpen = true
         defer { bar?.holdOpen = false }
         NSApp.activate(ignoringOtherApps: true)

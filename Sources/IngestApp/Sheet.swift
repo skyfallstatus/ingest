@@ -282,8 +282,9 @@ struct CardSheet: Equatable {
                 return no("\(plural(s.checkFailures.count)) didn't match.", .failed, s.canName ? .copy(s.toGo) : nil)
             }
             // What can be read can still be rescued, so the form that's open keeps its button.
-            // Nothing was going anywhere, so what failed was a check of a copy that's there.
-            if s.toGo > 0 { return no(s.hasDestination ? onlyHere(s.toGo) : "\(plural(s.toGo)) not proved yet.", .failed, s.canName ? .copy(s.toGo) : nil) }
+            // With nowhere it was going, or no drive to go on, what failed may well be a copy that's there.
+            let there = !s.hasDestination || s.model.workingDrive == nil
+            if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : onlyHere(s.toGo), .failed, s.canName ? .copy(s.toGo) : nil) }
             return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
         }
         if c.isHold { return no("On \(d) and checked, but take a look first.", .look, c.phase == .finished ? .eject : nil) }

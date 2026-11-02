@@ -594,6 +594,14 @@ import UserNotifications
         }
     }
 
+    /// What's asked over the folder panel. A file already proved isn't copied again, so only an untouched card stays whole.
+    func folderQuestion(_ card: CardSession) -> String {
+        let drive = workingDrive?.name ?? "the drive"
+        let started = card.states.values.contains { if case .verified = $0 { true } else { false } }
+        return started ? "Choose where the rest of \(card.name) goes on \(drive). What's already proved stays where it is."
+                       : "Choose where \(card.name) goes on \(drive). The card is kept whole, in its own folder."
+    }
+
     /// Copies a card into a new folder of its own inside `folder`, a path on the working drive.
     func copy(_ card: CardSession, into folder: String) {
         guard let drive = workingDrive else { return }

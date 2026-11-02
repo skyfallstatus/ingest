@@ -118,7 +118,7 @@ struct DiskImageTests {
         if case .failed? = r.states["S/clip.bin"] {} else { Issue.record("a link can't prove anything: \(String(describing: r.states["S/clip.bin"]))") }
     }
 
-    // The review's A-05: exFAT can't rename exclusively, and checking first left a gap another writer could fall into.
+    // ExFAT can't rename exclusively, and checking first left a gap another writer could fall into.
     @Test func `A file already at the name keeps it`() throws {
         let image = try Image(), from = image.root + "/from", to = image.root + "/to"
         put(from, Data("NEW".utf8)); put(to, Data("OTHER CLIENT FOOTAGE".utf8))
@@ -127,7 +127,7 @@ struct DiskImageTests {
         #expect(fm.contents(atPath: from) == Data("NEW".utf8))
     }
 
-    // The review's A6: a writer that publishes by rename leaves the app's reservation unchanged, and was overwritten.
+    // A writer that publishes by rename leaves the app's reservation unchanged, and was overwritten.
     @Test func `A writer that renames onto the name keeps it`() throws {
         let image = try Image(), from = image.root + "/from", to = image.root + "/to"
         put(from, Data("NEW".utf8))
@@ -156,7 +156,7 @@ struct DiskImageTests {
         #expect(fm.contents(atPath: from) == Data("NEW".utf8), "and the proved file is still at its temporary name")
     }
 
-    // The reviews' A1 and the real card: a real job on real exFAT, and the ID that really moved.
+    // A real job on real exFAT, and the ID that really moved.
     @Test func `An empty file on exFAT stays proved whatever its made-up ID does`() throws {
         let card = temp(), image = try Image(), drive = image.root
         put(card + "/SONY/SONYCARD.IND", Data())
@@ -202,7 +202,7 @@ struct DiskImageTests {
         if case .verified? = r.states["C0001.MP4"] {} else { Issue.record("\(String(describing: r.states["C0001.MP4"]))") }
     }
 
-    // The review's A7: the job that would clear a stale temp was refused for lack of the room that temp was taking.
+    // The job that would clear a stale temp was refused for lack of the room that temp was taking.
     @Test func `A dead job's temp doesn't stop the job that clears it`() throws {
         let card = temp(), image = try Image(size: "420m"), drive = image.root
         put(card + "/C0001.MP4", rnd(60_000_000))
@@ -213,7 +213,7 @@ struct DiskImageTests {
         #expect(!fm.fileExists(atPath: drive + "/.ingest/tmp/DEAD.0.part"))
     }
 
-    // The reviews' A11 and N11: a job removed the sidecar holding the tags of folders it never made.
+    // A job removed the sidecar holding the tags of folders it never made.
     @Test func `A job leaves an existing folder's tags alone`() throws {
         let card = temp(), image = try Image(), drive = image.root
         put(card + "/C0001.MP4", rnd(1000))

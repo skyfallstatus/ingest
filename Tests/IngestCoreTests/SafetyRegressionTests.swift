@@ -219,7 +219,7 @@ private func hashOfVerified(_ s: FileState?) -> String? {
     #expect(Ledger.isInsideDrive("F/A..B/C0001.MP4"))
 }
 
-// The review's B13 and C13: a character count was taken in bytes, so a name beyond ASCII cut the folder short.
+// A character count was taken in bytes, so a name beyond ASCII cut the folder short.
 @Test func aNameBeyondASCIIDoesNotCutItsHomeShort() {
     let name = "撮影/é.mov", clip = CardFile(relPath: name, size: 2 << 20, mtime: 0, kind: .video)
     #expect(CardMatcher.existingHome(states: [name: .likely(drivePath: "Shoot/A001/" + name)], files: [clip]) == "Shoot/A001")
@@ -266,7 +266,7 @@ private func editMiddle(_ path: String) {
     #expect(verdict(read, out, drive) != .safe)
 }
 
-// The review's A-08: the listing compared names and sizes, so a changed file with a changed time passed the last look.
+// The listing compared names and sizes, so a changed file with a changed time passed the last look.
 @Test func aChangedTimeOnTheCardFailsTheLastLook() throws {
     let (card, drive, read, _, out) = try provedCard()
     editMiddle(card + "/C0001.MP4")
@@ -303,7 +303,7 @@ private func editMiddle(_ path: String) {
     #expect(!isVerified(changed))
 }
 
-// The review's A-01 and C01: a retained proof never looked at the destination, so changed bytes kept Safe.
+// A retained proof never looked at the destination, so changed bytes kept Safe.
 @Test func aCopyEditedInPlaceLosesItsProof() throws {
     let (card, drive, read, ledger, out) = try provedCard()
     editMiddle(drive + "/S/C0001.MP4")
@@ -328,7 +328,7 @@ private func editMiddle(_ path: String) {
     #expect(verdict(read, out, drive) != .safe)
 }
 
-// The review's A-02, B01 and C02: proofs made on one drive were carried to another by a resumed job.
+// Proofs made on one drive were carried to another by a resumed job.
 @Test func aProofOnOneDriveMeansNothingOnAnother() throws {
     let card = temp(), a = temp(), b = temp()
     put(card + "/one.bin", rnd(1_000_000)); put(card + "/two.bin", rnd(1_000_000))
@@ -363,7 +363,7 @@ private func editMiddle(_ path: String) {
     #expect(items(drive) == 1, "nor once its mount has gone")
 }
 
-// The review's A-07, B02 and C04: a replacement at the same path kept the old verdict. The same drive read through a
+// A replacement at the same path kept the old verdict. The same drive read through a
 // new mount proves nothing either: proof ends with the mount, on both sides.
 @Test func aProofDiesWithTheDrivesMount() throws {
     let (_, drive, read, ledger, out) = try provedCard()
@@ -387,7 +387,7 @@ private func editMiddle(_ path: String) {
     if case .verified? = s["C0001.MP4"] { Issue.record("nothing on the drive can make a proof") }
 }
 
-// The review's A-04 and C06: the destination folder swapped for a link to the card, so the card was read twice.
+// The destination folder swapped for a link to the card, so the card was read twice.
 @Test func aDestinationFolderLinkedToTheCardProvesNothing() throws {
     let card = temp(), drive = temp()
     put(card + "/clip.bin", rnd(2_000_000))
@@ -451,7 +451,7 @@ private func editMiddle(_ path: String) {
     #expect(try fm.contentsOfDirectory(atPath: card) == ["C0001.MP4"], "the app never writes to a card")
 }
 
-// The review's C05: a saved setup could hold `..`, and the engine would follow it off the drive.
+// A saved setup could hold `..`, and the engine would follow it off the drive.
 @Test func aDestinationThatLeavesTheDriveIsRefusedBeforeAnythingIsWritten() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(1000))
@@ -479,7 +479,7 @@ private func editMiddle(_ path: String) {
     #expect(!setup([.client], inner: [InnerFolder(name: "F", role: .footage, children: [InnerFolder(name: "..", role: .plain)])]).staysOnDrive)
 }
 
-// The review's A-03: only the drive's cache was asked about, so a card read from the Mac's cache could count as proof.
+// Only the drive's cache was asked about, so a card read from the Mac's cache could count as proof.
 @Test func aCardCacheThatWontClearIsWeak() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(1_000_000))
@@ -514,7 +514,7 @@ private func editMiddle(_ path: String) {
     #expect(out.weakVerification)
 }
 
-// The review's A-06, as the owner decided it on 2026-11-02. A drive that said no is weak for good, and that has to be on the
+// As the owner decided on 2026-11-02. A drive that said no is weak for good, and that has to be on the
 // drive. One that stopped answering looks like a pulled cable, so it's finished the way anything is: a confirmed flush, then a
 // full read. If the refusal itself couldn't be written, that's the case below, and SAFETY.md says so.
 @Test func aRefusalThatCantBeWrittenEndsLikeACutOffJob() throws {
@@ -594,7 +594,7 @@ private func editMiddle(_ path: String) {
     #expect(r.proofs.isEmpty)
 }
 
-// The review's C09: weak was remembered by path, so a rename cleared it.
+// Weak was remembered by path, so a rename cleared it.
 @Test func aWeakCopyStaysWeakUnderANewName() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(2_000_000))
@@ -639,7 +639,7 @@ private func editMiddle(_ path: String) {
     #expect(CardMatcher.match(read: read, ledger: ledger, index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Good/C0001.MP4"))
 }
 
-// The review's A-09: reads were compared with each other and never with the listing, so two equal short reads passed.
+// Reads were compared with each other and never with the listing, so two equal short reads passed.
 @Test func twoEqualShortFilesAreNotAWholeFile() throws {
     let card = temp(), drive = temp()
     let d = rnd(2_000_000)
@@ -664,7 +664,7 @@ private func editMiddle(_ path: String) {
     #expect(Pipeline.conclude(read: read, states: ["C0001.MP4": fewer], proved: short, issues: [], driveRoot: drive, kind: kind).verdict != .safe)
 }
 
-// The review's A-10: any `.ingest-*.part` under a destination was deleted, including real card files.
+// Any `.ingest-*.part` under a destination was deleted, including real card files.
 @Test func aRealFileNamedLikeATempIsNeverSwept() throws {
     let card = temp(), drive = temp()
     put(card + "/.ingest-client.part", rnd(1_000_000))
@@ -695,7 +695,7 @@ private func editMiddle(_ path: String) {
     #expect(!fm.fileExists(atPath: temps + "DEAD.0.part"))
 }
 
-// The review's M04 and M08: a listing that fails part way through has to say so, and the card has to use the walker that does.
+// A listing that fails part way through has to say so, and the card has to use the walker that does.
 @Test func aListingThatFailsPartWayIsReported() {
     let card = temp()
     for i in 0..<6 { put(card + "/CLIP/\(i).MP4", rnd(100)) }
@@ -705,7 +705,7 @@ private func editMiddle(_ path: String) {
     #expect(Verdict.evaluate(listing: l, unreadable: [], states: [:], issues: [], cardUnchanged: true) != .safe)
 }
 
-// The review's C08: a device can log a CRC error during the full read, after the card's first look.
+// A device can log a CRC error during the full read, after the card's first look.
 @Test func anErrorTheDeviceLogsDuringTheCopyIsInTheVerdict() throws {
     let card = temp(), drive = temp(), log = temp() + "/codex.log"
     put(log, Data("all well\n".utf8))
@@ -776,7 +776,7 @@ private func stripedHalf() throws -> (card: String, drive: String, issue: CardIs
     return (card, drive, CardIssue(severity: .hold, code: "braw.striped", message: "half", paths: ["a.braw"]), out.states)
 }
 
-// The review's A-11 and C07: the name of the other half cleared the hold, whatever had that name.
+// The name of the other half cleared the hold, whatever had that name.
 @Test func aStripedHoldClearsOnlyOnceItsPartnerIsOnTheDrive() throws {
     let (_, drive, issue, states) = try stripedHalf()
     #expect(Pipeline.settle(issues: [issue], states: states, weak: false, driveRoot: drive, ledger: Ledger(driveRoot: drive)) == [issue])
@@ -941,7 +941,7 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     expectAReason(Pipeline.conclude(read: read, states: out.states, proved: [:], issues: [], driveRoot: drive, kind: kind).verdict, naming: "C0001.MP4")
 }
 
-// The review's A2: a crash between reserving a name and the rename left an empty file there, and that blocked the card for good.
+// A crash between reserving a name and the rename left an empty file there, and that blocked the card for good.
 @Test func aReservationACrashLeftBehindIsCleared() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(1_000_000))
@@ -1031,7 +1031,7 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     #expect(fm.fileExists(atPath: drive + "/S/SONY/SONYCARD.IND"))
 }
 
-// The review's A4: the bytes were only asked about for a path with no record, so a strong record elsewhere hid a weak copy.
+// The bytes were only asked about for a path with no record, so a strong record elsewhere hid a weak copy.
 @Test func aWeakCopyMovedOntoAStrongNameStaysWeak() throws {
     let card = temp(), other = temp(), drive = temp()
     put(card + "/a.bin", rnd(1_000_000))
@@ -1058,7 +1058,7 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     #expect(!r.weak)
 }
 
-// N01, as the owner decided it. What a sealed job has is a confirmed flush and then a read, so that's what finishes a job that
+// As the owner decided it. What a sealed job has is a confirmed flush and then a read, so that's what finishes a job that
 // was cut off, by a pulled cable or a crash. A real job on real files, stopped short of its seal.
 private func cutOffCopy(flush: Int32) throws -> (card: String, drive: String, read: CardRead) {
     let card = temp(), drive = temp()
@@ -1296,7 +1296,7 @@ private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throw
     for word in ["flush", "cache", "sync", "journal"] { #expect(!message.contains(word), "\(word)") }
 }
 
-// The reviews' N02 and A12: inside `seal`, `sync` was the volume flush, so the job asked three times and heard the last.
+// Inside `seal`, `sync` was the volume flush, so the job asked three times and heard the last.
 @Test func theFirstRefusalOfTheVolumeFlushCounts() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(1000))
@@ -1308,7 +1308,7 @@ private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throw
     #expect(calls.value == 1)
 }
 
-// The review's A8: a copy made a moment ago can go green while it's still only in a cache.
+// A copy made a moment ago can go green while it's still only in a cache.
 @Test func aCheckAsksTheDriveToFlushFirst() throws {
     let card = temp(), drive = temp()
     let d = rnd(1000)
@@ -1326,7 +1326,7 @@ private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throw
     #expect(check(record: true, flush: 1) == (true, 1))
 }
 
-// The review's A9: rule 14 says empty folders survive, and only a job made them.
+// Rule 14 says empty folders survive, and only a job made them.
 @Test func aCardsEmptyFolderHasToBeOnTheDrive() throws {
     let card = temp(), drive = temp()
     let d = rnd(1000)

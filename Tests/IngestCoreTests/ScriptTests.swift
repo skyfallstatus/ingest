@@ -9,7 +9,7 @@ private func executable(_ path: String, _ text: String) throws {
     chmod(path, 0o755)
 }
 
-// The review's B11, and N19: this has to fail the way a stale build does, with last time's binaries sitting there and every
+// This has to fail the way a stale build does, with last time's binaries sitting there and every
 // other tool working. Only then is it the pipe that's on trial, so it runs in a copy, with the tools stood in for.
 @Test func aFailedCompileStopsTheBuild() throws {
     let tree = temp(), bin = tree + "/bin", old = tree + "/old"
@@ -34,7 +34,7 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(!FileManager.default.fileExists(atPath: tree + "/dist"), "nothing is packaged")
 }
 
-// The review's N05: a tester holding only the disk image has to be able to get past macOS's refusal.
+// A tester holding only the disk image has to be able to get past macOS's refusal.
 @Test func theDiskImageCarriesTheInstallSteps() throws {
     let steps = try String(contentsOf: repo.appendingPathComponent("Resources/dmg/Read Me First.txt"), encoding: .utf8)
     for needed in ["Open Anyway", "Privacy & Security", "menu bar", "removable volumes", ".ingest", "exFAT"] { #expect(steps.contains(needed), "\(needed)") }
@@ -44,7 +44,7 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(beta.contains("Open Anyway"), "and so does the note that goes with it")
 }
 
-// The second review's R03: everything here ran on one version of macOS, and testers have to be told.
+// Everything here ran on one version of macOS, and testers have to be told.
 @Test func everyNoteToATesterSaysWhichMacOSIsUntested() throws {
     for rel in ["BETA.md", "README.md", "Resources/dmg/Read Me First.txt"] {
         let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
@@ -52,7 +52,7 @@ private func executable(_ path: String, _ text: String) throws {
     }
 }
 
-// The second review's R02: a way out nobody can take is worse than none. The app won't copy a file it has just proved.
+// A way out nobody can take is worse than none. The app won't copy a file it has just proved.
 @Test func noNoteOffersAWayOutThatDoesntExist() throws {
     for rel in ["BETA.md", "docs/SAFETY.md", "README.md", "Resources/dmg/Read Me First.txt"] {
         let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
@@ -61,7 +61,7 @@ private func executable(_ path: String, _ text: String) throws {
     }
 }
 
-// The second review's R04: the install steps are what gets a tester past macOS, and their name fell off the window.
+// The install steps are what gets a tester past macOS, and their name fell off the window.
 @Test func theInstallStepsFitInTheDiskImageWindow() throws {
     let layout = try String(contentsOf: repo.appendingPathComponent("scripts/dmg-layout.py"), encoding: .utf8)
     func number(_ pattern: String) throws -> Int {
@@ -75,7 +75,7 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(Int(image.size.height) >= window - 28, "and the background has to reach the bottom")
 }
 
-// The owner's decision on N01: a cut-off job isn't on hold for good. The notes have to tell that story, and not the old one.
+// The owner's decision: a cut-off job isn't on hold for good. The notes have to tell that story, and not the old one.
 @Test func theNotesTellTheStoryOfACutOffCopy() throws {
     for rel in ["BETA.md", "README.md", "docs/SAFETY.md", "Resources/dmg/Read Me First.txt"] {
         let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)

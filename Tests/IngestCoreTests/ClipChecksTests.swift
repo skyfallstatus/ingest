@@ -125,7 +125,7 @@ private func moov() -> [UInt8] { mvhd(unix: 1_760_000_000) }
         #expect(f.probe().clipChecks.sentence == "Each MP4 has an index. GoPro chapters have no gaps. Not played.")
     }
 
-    // The review's C10: running out of patience was reported as an index that passed.
+    // Running out of patience was reported as an index that passed.
     @Test("A walk that gave up is neither a pass nor a fault") func walkLimit() {
         let f = Fixture("cc-limit")
         f.write("CLIP/A.MP4", (0..<513).flatMap { _ in atom("free") })
@@ -143,7 +143,7 @@ private func moov() -> [UInt8] { mvhd(unix: 1_760_000_000) }
         #expect(!r.clipChecks.sentence.contains("has an index"))
     }
 
-    // The review's C11: numbers can show a gap, and can't show the last part is the last.
+    // Numbers can show a gap, and can't show the last part is the last.
     @Test("RED ProRes never claims every part is there") func redProRes() {
         let f = Fixture("cc-redmov")
         f.write("A001_0101XY.RDM/A001_C001_0101XY.RDC/A001_C001_0101XY_001.MOV", mp4Bytes(major: "qt  ", moov: moov()))

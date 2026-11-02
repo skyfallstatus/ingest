@@ -106,7 +106,6 @@ private final class Dying: @unchecked Sendable {
 }
 
 @Suite("The app model", .serialized) @MainActor struct AppModelTests {
-    // The review's A-02, B01 and C02.
     @Test func `Stop, switch drive, Resume: nothing proved on the old drive counts on the new one`() async throws {
         let w = Bench()
         let c = await w.ready()
@@ -135,7 +134,6 @@ private final class Dying: @unchecked Sendable {
         #expect(c.verdict != .safe)
     }
 
-    // The review's C03.
     @Test func `Choosing another drive takes the green away at once`() async {
         let w = Bench()
         let c = await w.safe()
@@ -147,7 +145,6 @@ private final class Dying: @unchecked Sendable {
         #expect(!c.isSafe(on: b))
     }
 
-    // The review's A-07, B02 and C04.
     @Test func `A different drive at the same path loses the old verdict`() async throws {
         let w = Bench()
         let c = await w.safe()
@@ -199,7 +196,7 @@ private final class Dying: @unchecked Sendable {
         if case .verified? = c.states["one.bin"] { Issue.record("a changed copy can't stay proved") }
     }
 
-    // The review's A3: a look during a match was dropped, so green stood over a changed copy. Also the flaky test.
+    // A look during a match was dropped, so green stood over a changed copy.
     @Test func `A look during a match isn't lost`() async throws {
         let w = Bench()
         let c = await w.safe()
@@ -216,7 +213,7 @@ private final class Dying: @unchecked Sendable {
         #expect(c.verdict != .safe)
     }
 
-    // The other half of A3: an older look landing after a newer one must not bring its green back.
+    // An older look landing after a newer one must not bring its green back.
     @Test func `An older look can't land over a newer one`() async throws {
         let w = Bench()
         let c = await w.safe()
@@ -240,7 +237,7 @@ private final class Dying: @unchecked Sendable {
         #expect(c.verdict != .safe)
     }
 
-    // The review's A5: a file that lost its proof was called only on the card, and nothing read it again.
+    // A file that lost its proof was called only on the card, and nothing read it again.
     @Test func `A file that lost its proof is read again, and comes back by itself`() async throws {
         let w = Bench()
         let c = await w.safe()
@@ -252,7 +249,7 @@ private final class Dying: @unchecked Sendable {
         #expect(c.control.bytesChecked == 1_000_000, "the one file, and only that one")
     }
 
-    // The review's N03: the rescan after a job turned the reason into nothing.
+    // The rescan after a job turned the reason into nothing.
     @Test func `A failed copy keeps its reason through the rescan`() async throws {
         let w = Bench()
         let c = await w.ready()
@@ -268,7 +265,6 @@ private final class Dying: @unchecked Sendable {
         #expect(said.contains("one.bin"), "\(said)")
     }
 
-    // The review's N04.
     @Test func `A drive that comes back carries on, and stops saying it's unplugged`() async throws {
         let w = Bench()
         put(w.card + "/big.bin", rnd(400_000_000))
@@ -289,7 +285,6 @@ private final class Dying: @unchecked Sendable {
         await w.until("it to settle") { !c.isMatching && c.phase == .ready }
     }
 
-    // The review's N06.
     @Test func `A card back before its job has stopped gets a new session`() async throws {
         let w = Bench()
         put(w.card + "/big.bin", rnd(400_000_000))
@@ -304,7 +299,6 @@ private final class Dying: @unchecked Sendable {
         await w.until("a new session") { w.model.cards.first.map { $0 !== c && !$0.volumeGone } ?? false }
     }
 
-    // The review's N07.
     @Test func `A card taken out after a job ended short isn't said to have gone mid-copy`() async throws {
         let w = Bench()
         let c = await w.ready()
@@ -359,7 +353,7 @@ private final class Dying: @unchecked Sendable {
             + sheet.lines.flatMap { [$0.label] + $0.detail }).joined(separator: " | ")
     }
 
-    // The owner's decision on N01. Plug back in, it checks, the rest copies, Safe, and it stays Safe. The first file was copied
+    // The owner's decision. Plug back in, it checks, the rest copies, Safe, and it stays Safe. The first file was copied
     // by a real job that never reached its seal, as a pulled cable or a crash leaves it.
     @Test func `A job that was cut off finishes as if nothing happened`() async throws {
         let w = Bench()
@@ -390,7 +384,7 @@ private final class Dying: @unchecked Sendable {
         #expect(c.issues.isEmpty, "\(c.issues)")
     }
 
-    // The second review's B2: "didn't match" went out with no Copy button, in the very case the app exists for.
+    // "didn't match" went out with no Copy button, in the very case the app exists for.
     @Test func `A bad copy on the drive doesn't take the Copy button away`() async throws {
         let w = Bench()
         var card = try Data(contentsOf: URL(fileURLWithPath: w.card + "/one.bin"))
@@ -421,7 +415,7 @@ private final class Dying: @unchecked Sendable {
         return c
     }
 
-    // The second review's R01: the warning went about a second after the job stopped, and the widget said no card was ever there.
+    // The warning went about a second after the job stopped, and the widget said no card was ever there.
     @Test func `A pulled card's warning stays after the job stops`() async throws {
         let w = Bench()
         let c = await cardPulledMidCopy(w)
@@ -458,7 +452,7 @@ private final class Dying: @unchecked Sendable {
         return c
     }
 
-    // The second review's R05: setup covered the reason, at the one moment a new tester needs it.
+    // Setup covered the reason, at the one moment a new tester needs it.
     @Test func `Setup says why a plugged-in drive can't be used`() async {
         let w = Bench()
         var ntfs = volume(w.a, "NTFS"); ntfs.isReadOnly = true
@@ -471,7 +465,6 @@ private final class Dying: @unchecked Sendable {
         #expect(CardSheet.waitingForDrive(model: w.model).sentence == "It's where your footage goes.")
     }
 
-    // The review's N08.
     @Test func `First-run setup waits for a volume it has to ask about`() async {
         let w = Bench()
         var met = false
@@ -484,7 +477,7 @@ private final class Dying: @unchecked Sendable {
         #expect(met)
     }
 
-    // The review's N09: every re-inserted card now takes this path, and it can be long.
+    // Every re-inserted card now takes this path, and it can be long.
     @Test func `A check keeps the Mac awake, can be stopped, and says when it's done`() async throws {
         let w = Bench()
         let c = await w.safe()
@@ -515,7 +508,6 @@ private final class Dying: @unchecked Sendable {
         await w.until("Safe again") { c.isSafe(on: w.model.workingDrive) }
     }
 
-    // The review's N10.
     @Test func `A plugged-in drive that isn't offered says why`() async {
         let w = Bench()
         var read = volume(w.a, "NTFS"); read.isReadOnly = true
@@ -525,7 +517,6 @@ private final class Dying: @unchecked Sendable {
         #expect(CardSheet.idle(model: w.model).sentence.contains("read-only"))
     }
 
-    // The review's N12.
     @Test func `Safe says which of two drives with one name`() async {
         let w = Bench()
         let first = temp() + "/SHOOT SSD", second = temp() + "/SHOOT SSD 1"
@@ -543,7 +534,6 @@ private final class Dying: @unchecked Sendable {
         #expect(w.model.notified.last?.isEmpty == false)
     }
 
-    // The review's N15.
     @Test func `A settled card can always be read again`() async {
         let w = Bench()
         let c = await w.safe()
@@ -570,7 +560,7 @@ private final class Dying: @unchecked Sendable {
         #expect(c.control.bytesChecked == 2_000_000)
     }
 
-    // The review's B01: Folder Setup could change the drive under a running job.
+    // Folder Setup could change the drive under a running job.
     @Test func `The working drive can't change under a job`() async {
         let w = Bench()
         let c = await w.ready()
@@ -581,7 +571,6 @@ private final class Dying: @unchecked Sendable {
         c.phase = .ready
     }
 
-    // The review's C15.
     @Test func `With no drive, a card that can't be listed isn't empty`() async {
         let w = Bench()
         let gone = "/tmp/ingest-no-such-card-" + UUID().uuidString
@@ -602,7 +591,6 @@ private final class Dying: @unchecked Sendable {
         #expect(c.verdict == .empty)
     }
 
-    // The review's B03.
     @Test func `Two drives with one name stay two drives`() async {
         let w = Bench()
         let first = temp() + "/SHOOT SSD", second = temp() + "/SHOOT SSD 1"
@@ -618,7 +606,6 @@ private final class Dying: @unchecked Sendable {
         #expect(Set(ids) == Set(w.model.drives.map(\.id)))
     }
 
-    // The review's B04.
     @Test func `Safe names the drive however long its name is`() async {
         let w = Bench()
         w.driveA.name = "Samsung SSD Projects"
@@ -628,7 +615,7 @@ private final class Dying: @unchecked Sendable {
         #expect(MenuBarState.make(w.model).spoken.contains("Samsung SSD Projects"))
     }
 
-    // The review's B12: a menu bar out of room hides the item, and that can be the only way back in.
+    // A menu bar out of room hides the item, and that can be the only way back in.
     @Test func `A long drive name stays out of the menu bar`() async {
         let w = Bench()
         w.driveA.name = "Samsung SSD Projects"
@@ -637,7 +624,6 @@ private final class Dying: @unchecked Sendable {
         #expect(MenuBarState.make(w.model).spoken.contains("Don't format"))
     }
 
-    // The review's B05.
     @Test func `First-run setup waits while a volume can't be read`() async {
         let w = Bench()
         var met = false
@@ -650,7 +636,6 @@ private final class Dying: @unchecked Sendable {
         #expect(met)
     }
 
-    // The review's B06.
     @Test func `A setup that can't be saved says so, and why`() async throws {
         let w = Bench()
         _ = await w.ready()
@@ -668,7 +653,6 @@ private final class Dying: @unchecked Sendable {
         #expect(d.setup == setup)
     }
 
-    // The review's C05.
     @Test func `A setup on a drive that leads off it counts as none`() throws {
         let w = Bench()
         var setup = ShootPlanner.presets()[0].setup
@@ -677,7 +661,6 @@ private final class Dying: @unchecked Sendable {
         #expect(Stores.setup(onDrive: w.a) == nil)
     }
 
-    // The review's C12.
     @Test func `Two cards named for one shoot don't share a folder, even in the queue`() async {
         let w = Bench()
         let other = temp()

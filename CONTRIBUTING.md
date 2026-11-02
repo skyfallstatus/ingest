@@ -49,7 +49,7 @@ Both must be clean. No Xcode is needed, and `scripts/test.sh` needs no hardware.
 
 ## Style
 
-- No third-party dependencies.
+- No third-party dependencies beyond Sparkle, which installs updates.
 - Small and deliberate. Prefer deleting code to adding it. Version 1 stays small on purpose.
 - Nothing is added to the main widget lightly. It's about the card in front of you, and everything else goes behind the quiet control.
 - Words shown to people are plain and calm, and they never claim more than was checked.

@@ -149,6 +149,7 @@ final class SparkleEngine: NSObject, UpdateEngine, SPUUserDriver {
         case .downloaded: .downloaded
         default: .notDownloaded
         }
+        UpdateLog.write("found \(appcastItem.displayVersionString)")
         updates.found(version: appcastItem.displayVersionString, stage: stage) { reply(.install) }
     }
 
@@ -169,7 +170,7 @@ final class SparkleEngine: NSObject, UpdateEngine, SPUUserDriver {
     func showDownloadInitiated(cancellation: @escaping () -> Void) {}
     func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {}
     func showDownloadDidReceiveData(ofLength length: UInt64) {}
-    func showDownloadDidStartExtractingUpdate() {}
+    func showDownloadDidStartExtractingUpdate() { UpdateLog.write("downloaded") }
     func showExtractionReceivedProgress(_ progress: Double) {}
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
@@ -181,7 +182,10 @@ final class SparkleEngine: NSObject, UpdateEngine, SPUUserDriver {
     }
 
     func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { acknowledgement() }
-    func dismissUpdateInstallation() { updates.dismissed() }
+    func dismissUpdateInstallation() {
+        UpdateLog.write("dismissed")
+        updates.dismissed()
+    }
 }
 
 /// Where the end-to-end test reads what happened. Off in every real build.

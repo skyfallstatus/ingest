@@ -101,8 +101,11 @@ p=sys.argv[1]; d=bytearray(open(p,'rb').read()); d[len(d)//2]^=0xFF; open(p,'wb'
 PY
 start plain
 check "the old build launched" 'wait_for "^0.1 .* launched" 30'
-check "the update was refused" 'wait_for "error:" 60'
+check "it found the update" 'wait_for "found 0.2" 60'
+check "it was fetched, then given up on" 'wait_for "downloaded" 60 && wait_for "dismissed\|error:" 60'
 sleep 2
+check "it never got as far as ready" '! grep -q "ready:" $W/log'
+say_ "      $(grep -E "error:|dismissed" $W/log | head -2 | cut -c1-110)"
 check "the old version is still on disk" '[[ $(version) == 0.1 ]]'
 check "and still running" '[[ -n $(running) ]]'
 check "nothing restarted" '! grep -q "restarting" $W/log'
@@ -110,7 +113,7 @@ package
 publish
 
 say_ "--- a job in progress"
-rm -rf $W/drive/* $W/drive/.ingest
+rm -rf $W/drive; mkdir $W/drive
 start job
 check "the job started" 'wait_for "job running" 60'
 check "Restart was refused during it" 'wait_for "refused during a job" 90'

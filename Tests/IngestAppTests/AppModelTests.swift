@@ -135,7 +135,8 @@ private final class ExFATDrive {
     deinit { detach(); try? FileManager.default.removeItem(atPath: folder) }
 }
 
-@Suite("Empty folders a copy left out", .serialized) @MainActor struct MissingFolderTests {
+// In the app model's suite, because every model shares one saved working drive, so two suites can't run side by side.
+extension AppModelTests {
     /// The card's files on the drive in `Rushes/A082`, none of its empty folders, and the card settled on hold.
     private func shortOfFolders(_ w: Bench, drive: String) async throws -> CardSession {
         for f in emptyFolders { try FileManager.default.createDirectory(atPath: w.card + "/" + f, withIntermediateDirectories: true) }

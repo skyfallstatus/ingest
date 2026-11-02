@@ -152,6 +152,62 @@ private func freeMegabytes() throws -> Int {
     #expect(r.said.contains("floor"), "\(r.said)")
 }
 
+@Test func theTimeLimitStopsARunWithItsOwnWords() throws {
+    let folder = temp(), pid = folder + "/pid"
+    let r = try safety("echo $$ > \(pid); sleep 77", env: ["INGEST_TEST_SECONDS": "2"])
+    #expect(r.code == 98, "\(r.said)")
+    #expect(r.said.contains("stopping the whole run") && r.said.contains("limit"), "\(r.said)")
+    let child = Int32(try String(contentsOfFile: pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+    #expect(kill(child, 0) != 0, "what it started has gone too")
+}
+
+@Test func theTimeLimitIsTwentyMinutesUnlessSomeoneSays() throws {
+    let script = try String(contentsOf: repo.appendingPathComponent("scripts/test.sh"), encoding: .utf8)
+    #expect(script.contains("LIMIT=$(( ${INGEST_TEST_MINUTES:-20} * 60 ))"))
+}
+
+@Test func aProcessThatCantStartStopsTheRunAtOnce() throws {
+    let folder = temp(), pid = folder + "/pid"
+    let r = try safety("echo $$ > \(pid); sleep 77", env: ["INGEST_TEST_SPAWN": "/nonexistent/true"])
+    #expect(r.code == 97, "\(r.said)")
+    #expect(r.said.contains("couldn't be started"), "\(r.said)")
+    if let text = try? String(contentsOfFile: pid, encoding: .utf8), let child = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        #expect(kill(child, 0) != 0, "what it started has gone too")
+    }
+}
+
+// The real thing: this run alone is held to its own limit on processes, so forks really fail, for it and nothing else.
+// A zsh watchdog died at this point and left the tests running, which a test with a pretend path could never show.
+@Test func theWatchdogOutlivesARealForkFailure() throws {
+    let script = repo.appendingPathComponent("scripts/test.sh").path, lock = temp() + "/lock", pids = temp() + "/pids"
+    let mine = getuid()
+    let list = Process(), out = Pipe()
+    list.executableURL = URL(fileURLWithPath: "/bin/ps")
+    list.arguments = ["-axo", "uid="]
+    list.standardOutput = out
+    try list.run()
+    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    list.waitUntilExit()
+    let count = text.split(separator: "\n").filter { Int($0.trimmingCharacters(in: .whitespaces)) == Int(mine) }.count
+    let eat = "perl -e 'for(1..200){ my $p=fork(); last unless defined $p; if(!$p){open(F,\">>\(pids)\");print F \"$$\\n\";close F;sleep 20;exit} } sleep 20'"
+    let p = Process(), said = Pipe()
+    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    p.arguments = ["-c", "ulimit -u \(count + 40); exec zsh \(script)"]
+    p.environment = ProcessInfo.processInfo.environment.merging(
+        ["INGEST_TEST_COMMAND": eat, "INGEST_TEST_LOCK": lock, "INGEST_TEST_START_MB": "1", "INGEST_TEST_FLOOR_MB": "1", "INGEST_TEST_DROP_MB": "99999999"]) { _, new in new }
+    p.standardOutput = said
+    p.standardError = said
+    try p.run()
+    let words = String(decoding: said.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    p.waitUntilExit()
+    #expect(p.terminationStatus == 97, "\(words)")
+    #expect(words.contains("couldn't be started"), "\(words)")
+    #expect(!FileManager.default.fileExists(atPath: lock), "it cleared up, on no new processes")
+    for line in (try? String(contentsOfFile: pids, encoding: .utf8))?.split(separator: "\n") ?? [] {
+        #expect(kill(Int32(line)!, 0) != 0, "nothing it started is left")
+    }
+}
+
 @Test func oneRunGoesAtATime() throws {
     let lock = temp() + "/lock", mark = temp() + "/ran"
     try FileManager.default.createDirectory(atPath: lock, withIntermediateDirectories: true)

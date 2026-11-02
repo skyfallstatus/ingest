@@ -818,6 +818,7 @@ extension AppModelTests {
         let good = FileManager.default.contents(atPath: w.a + "/Sorted/two.bin")
         w.model.retry(c)                        // the same folder again isn't a rescue
         await w.until("the retry") { !c.isBusy && !c.isMatching }
+        await w.model.matchCard(c)              // the same rescan again, so a failed name reads as the bad copy it is
         #expect(c.badCopyNote == nil, "\(String(describing: c.badCopyNote))")
         c.shootLabel = "Old Client / Old Shoot"
         w.model.copy(c, into: "Elsewhere")

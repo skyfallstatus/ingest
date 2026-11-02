@@ -40,7 +40,7 @@ swift build
 scripts/test.sh
 ```
 
-Both must be clean. No Xcode is needed, and `scripts/test.sh` needs no hardware. It wants 150 GB free, runs one test at a time, and stops itself if the disk is filling: the top of the script says how to run it on a smaller disk.
+Both must be clean. No Xcode is needed, and `scripts/test.sh` needs no hardware. It wants 150 GB free, runs one test at a time, and stops itself if the disk is filling, the run passes 20 minutes, or the Mac can't start a process: the top of the script says how to change those.
 
 - **Engine or verdict changes** need a test. A bug that could give a false Safe gets a test in `SafetyRegressionTests.swift` first, and that test must fail before your fix.
 - **App flow changes:** also run `SAMPLE_CARD=/path/to/card scripts/selftest.sh`. It uses its own throwaway disk images and fences the app in to them, but it does mount them, so don't run it while you're working with real cards.

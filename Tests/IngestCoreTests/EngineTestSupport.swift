@@ -32,6 +32,45 @@ final class Flag: @unchecked Sendable {
     }
 }
 
+/// Why something that writes until a disk is full wouldn't start.
+struct NotItsOwnImage: Error, CustomStringConvertible {
+    var description: String
+}
+
+/// The image file mounted at `path`, as macOS itself reports it. Nil for anything else, and a plain folder is what a failed attach
+/// leaves behind, on the Mac's own disk.
+func imageMounted(at path: String) -> String? {
+    let p = Process(), out = Pipe()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+    p.arguments = ["info", "-plist"]
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    guard let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+          let images = info["images"] as? [[String: Any]] else { return nil }
+    for image in images {
+        let entities = image["system-entities"] as? [[String: Any]] ?? []
+        if entities.contains(where: { $0["mount-point"] as? String == path }) { return image["image-path"] as? String }
+    }
+    return nil
+}
+
+/// Writes to `fd` until it refuses, and never past `limit` bytes, whatever the disk says.
+@discardableResult func writeUntilFull(_ fd: Int32, limit: Int) -> Int {
+    var buf = [UInt8](repeating: 0, count: 1 << 20)
+    var written = 0
+    for size in [buf.count, 4096] {
+        while written + size <= limit {
+            let n = write(fd, &buf, size)
+            if n <= 0 { break }
+            written += n
+        }
+    }
+    return written
+}
+
 func temp() -> String {
     let p = scratch + "/" + UUID().uuidString
     try! FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)

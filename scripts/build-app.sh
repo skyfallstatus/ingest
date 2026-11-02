@@ -10,7 +10,7 @@ VERSION=$(sed -n 's/.*static let version = "\(.*\)"/\1/p' Sources/IngestCore/App
 OUT=dist/$NAME.app
 # A failed compile has to stop here. Otherwise last time's binaries get packaged as this build.
 for arch in arm64 x86_64; do
-  swift build -c release --product IngestApp --triple $arch-apple-macosx14.0 --scratch-path .build/$arch 2>&1 | tail -1
+  swift build -j 6 -c release --product IngestApp --triple $arch-apple-macosx14.0 --scratch-path .build/$arch 2>&1 | tail -1
 done
 bin() { swift build -c release --product IngestApp --triple $1-apple-macosx14.0 --scratch-path .build/$1 --show-bin-path; }
 ARM=$(bin arm64)

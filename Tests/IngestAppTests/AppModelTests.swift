@@ -110,6 +110,7 @@ private final class Dying: @unchecked Sendable {
 private let emptyFolders = ["M4ROOT/SUB", "M4ROOT/TAKE", "SONY/PRO/LUT", "M4ROOT/GENERAL/LUT"]
 
 private final class ExFATDrive {
+    struct NoImage: Error {}
     let folder = "/private/tmp/ingest-image-" + UUID().uuidString.prefix(8)
     var dmg: String { folder + "/v.sparseimage" }
     var root: String { folder + "/m" }
@@ -127,10 +128,20 @@ private final class ExFATDrive {
 
     init() throws {
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
-        #expect(hdiutil(["create", "-type", "SPARSE", "-size", "64m", "-fs", "ExFAT", "-volname", "ING" + UUID().uuidString.prefix(6), dmg]) == 0)
-        attach()
+        guard hdiutil(["create", "-type", "SPARSE", "-size", "64m", "-fs", "ExFAT", "-volname", "ING" + UUID().uuidString.prefix(6), dmg]) == 0 else {
+            try? FileManager.default.removeItem(atPath: folder)
+            throw NoImage()
+        }
+        do { try attach() } catch { try? FileManager.default.removeItem(atPath: folder); throw error }
     }
-    func attach(readOnly: Bool = false) { #expect(hdiutil(["attach", "-nobrowse", "-noautoopen", "-mountpoint", root, dmg] + (readOnly ? ["-readonly"] : [])) == 0) }
+
+    /// What's left at `root` without an image is a plain folder on the Mac's own disk, so a failed attach ends the test.
+    func attach(readOnly: Bool = false) throws {
+        let code = hdiutil(["attach", "-nobrowse", "-noautoopen", "-mountpoint", root, dmg] + (readOnly ? ["-readonly"] : []))
+        var fs = statfs()
+        let kind = statfs(root, &fs) == 0 ? withUnsafeBytes(of: fs.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) } : ""
+        guard code == 0, kind == "exfat" else { throw NoImage() }
+    }
     func detach() { hdiutil(["detach", root]) }
     deinit { detach(); try? FileManager.default.removeItem(atPath: folder) }
 }
@@ -243,7 +254,7 @@ extension AppModelTests {
         let image = try ExFATDrive(), w = Bench(drive: image.root)
         for f in ["one.bin", "two.bin"] { put(image.root + "/Rushes/A082/" + f, try Data(contentsOf: URL(fileURLWithPath: w.card + "/" + f))) }
         image.detach()
-        image.attach(readOnly: true)
+        try image.attach(readOnly: true)
         let c = try await shortOfFolders(w, drive: temp())
         #expect(addButton(c, w) == nil)
         await w.model.addMissingFolders(c)

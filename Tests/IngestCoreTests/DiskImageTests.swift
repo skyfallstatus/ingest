@@ -10,6 +10,7 @@ private final class Image {
     let folder = "/private/tmp/ingest-image-" + UUID().uuidString.prefix(8)
     var dmg: String { folder + "/v.sparseimage" }
     var root: String { folder + "/m" }
+    let bytes: Int
 
     @discardableResult private static func hdiutil(_ args: [String]) -> Int32 {
         let p = Process()
@@ -22,14 +23,22 @@ private final class Image {
         return p.terminationStatus
     }
 
-    init(size: String = "512m") throws {
+    init(megabytes: Int = 512) throws {
+        bytes = megabytes << 20
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         let label = "ING" + UUID().uuidString.prefix(6)     // exFAT labels stop at 11 characters
-        #expect(Self.hdiutil(["create", "-type", "SPARSE", "-size", size, "-fs", "ExFAT", "-volname", String(label), dmg]) == 0)
-        attach()
+        guard Self.hdiutil(["create", "-type", "SPARSE", "-size", "\(megabytes)m", "-fs", "ExFAT", "-volname", String(label), dmg]) == 0 else {
+            try? FileManager.default.removeItem(atPath: folder)
+            throw NotItsOwnImage(description: "the image couldn't be made")
+        }
+        do { try attach() } catch { try? FileManager.default.removeItem(atPath: folder); throw error }
     }
 
-    func attach(readOnly: Bool = false) { #expect(Self.hdiutil(["attach", "-nobrowse", "-noautoopen", "-mountpoint", root, dmg] + (readOnly ? ["-readonly"] : [])) == 0) }
+    /// A test with no image has nowhere to go: what's left at `root` is a plain folder on the Mac's own disk.
+    func attach(readOnly: Bool = false) throws {
+        let code = Self.hdiutil(["attach", "-nobrowse", "-noautoopen", "-mountpoint", root, dmg] + (readOnly ? ["-readonly"] : []))
+        guard code == 0, imageMounted(at: root) == dmg else { throw NotItsOwnImage(description: "\(dmg) isn't mounted at \(root)") }
+    }
     @discardableResult func detach() -> Int32 { Self.hdiutil(["detach", root]) }
     deinit {
         detach()
@@ -45,11 +54,16 @@ private func publish(_ from: String, _ to: String) -> Int32 { IngestEngine.publi
 @Suite("Real volumes", .serialized)
 struct DiskImageTests {
     /// A real full exFAT drive: a record fails with its bytes half down and the file's end moved, so nothing marks where it stops.
-    private func fillUntilARecordFails(_ journal: LedgerJournal, _ drive: String, like line: LedgerEntry) -> String {
-        let filler = drive + "/filler.bin"
+    /// It writes until the disk refuses, so it runs only on this image, on a volume no bigger than it, and for no more than its size.
+    private func fillUntilARecordFails(_ journal: LedgerJournal, _ image: Image, like line: LedgerEntry) throws -> String {
+        guard imageMounted(at: image.root) == image.dmg else { throw NotItsOwnImage(description: "\(image.root) isn't this test's image") }
+        var fs = statfs()
+        guard statfs(image.root, &fs) == 0, UInt64(fs.f_blocks) * UInt64(fs.f_bsize) <= UInt64(image.bytes) else {
+            throw NotItsOwnImage(description: "\(image.root) is bigger than its image")
+        }
+        let filler = image.root + "/filler.bin"
         let fd = open(filler, O_CREAT | O_WRONLY, 0o644)
-        var buf = [UInt8](repeating: 0, count: 1 << 20)
-        for size in [buf.count, 4096] { while write(fd, &buf, size) > 0 {} }
+        writeUntilFull(fd, limit: image.bytes)
         fsync(fd); close(fd)
         for i in 0 ..< 200_000 {
             var e = line; e.cardPath = "PAD\(i).MP4"; e.drivePath = "S/PAD\(i).MP4"
@@ -73,8 +87,42 @@ struct DiskImageTests {
                            hash: hexHash(ci_hash_uncached(card + "/" + f.relPath, nil, nil, nil).hash), weak: weak)
     }
 
+    @Test func `A test can tell its own image from the Mac's own disk`() throws {
+        let image = try Image(megabytes: 32)
+        #expect(imageMounted(at: image.root) == image.dmg)
+        #expect(imageMounted(at: temp()) == nil, "a plain folder, which is what a failed attach leaves")
+        #expect(imageMounted(at: image.folder) == nil)
+    }
+
+    @Test func `What fills a disk won't touch a folder that lost its image`() throws {
+        let image = try Image(megabytes: 32)
+        #expect(image.detach() == 0)
+        let drive = temp()
+        let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "J", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+        defer { journal.close() }
+        let line = LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil)
+        #expect(throws: NotItsOwnImage.self) { _ = try fillUntilARecordFails(journal, image, like: line) }
+        #expect(!fm.fileExists(atPath: image.root + "/filler.bin"), "it stopped before writing a byte")
+    }
+
+    @Test func `An image that won't attach ends the test, not just a line of it`() throws {
+        let image = try Image(megabytes: 32)
+        #expect(image.detach() == 0)
+        try fm.removeItem(atPath: image.dmg)
+        #expect(throws: NotItsOwnImage.self) { try image.attach() }
+    }
+
+    @Test func `Filling stops at its limit, whatever the disk would take`() throws {
+        let path = temp() + "/f"
+        let fd = open(path, O_CREAT | O_WRONLY, 0o644)
+        defer { close(fd) }
+        let written = writeUntilFull(fd, limit: 3 << 20)
+        #expect(written == 3 << 20)
+        #expect(try fm.attributesOfItem(atPath: path)[.size] as? Int == 3 << 20)
+    }
+
     @Test func `A failed record on a full drive can't swallow a refusal after it`() throws {
-        let card = temp(), image = try Image(size: "600m"), drive = image.root
+        let card = temp(), image = try Image(megabytes: 600), drive = image.root
         put(card + "/C0001.MP4", rnd(1_000_000))
         let read = CardReader.read(root: card, kind: kind)
         let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "TORN", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
@@ -82,7 +130,7 @@ struct DiskImageTests {
         put(drive + "/S/C0001.MP4", fm.contents(atPath: card + "/C0001.MP4")!)
         let line = entry(card, read)
         try journal.record(line)
-        let filler = fillUntilARecordFails(journal, drive, like: line)
+        let filler = try fillUntilARecordFails(journal, image, like: line)
         unlink(filler)
         _ = journal.seal([line], flushVolume: { EIO })
         journal.close()
@@ -90,7 +138,7 @@ struct DiskImageTests {
     }
 
     @Test func `A failed record on a full drive can't swallow a weak mark after it`() throws {
-        let card = temp(), image = try Image(size: "600m"), drive = image.root
+        let card = temp(), image = try Image(megabytes: 600), drive = image.root
         put(card + "/C0001.MP4", rnd(1_000_000))
         let read = CardReader.read(root: card, kind: kind)
         let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "TORN", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
@@ -98,7 +146,7 @@ struct DiskImageTests {
         put(drive + "/S/C0001.MP4", fm.contents(atPath: card + "/C0001.MP4")!)
         var other = entry(card, read); other.drivePath = "S/OTHER.MP4"
         try journal.record(other)
-        let filler = fillUntilARecordFails(journal, drive, like: other)
+        let filler = try fillUntilARecordFails(journal, image, like: other)
         unlink(filler)
         try journal.record(entry(card, read, weak: true))
         #expect(journal.seal([], flushVolume: { 0 }))
@@ -115,7 +163,7 @@ struct DiskImageTests {
                                  hooks: FaultHooks(afterCopy: { _, _, _ in dying.on = true }, syncVolume: { _ in 0 }, journalFails: { dying.on })) { _ in }
         #expect(fm.fileExists(atPath: drive + "/S/C0001.MP4"), "the attack needs the file with no record of it")
         image.detach()
-        image.attach(readOnly: true)
+        try image.attach(readOnly: true)
         guard case .hold = visit(card, drive, read, record: false) else { Issue.record("a look can't finish it"); return }
         guard case .hold = visit(card, drive, read, record: true) else { Issue.record("and there's no flush to be had"); return }
     }
@@ -126,7 +174,7 @@ struct DiskImageTests {
         #expect(anchor.isCurrent)
         #expect(image.detach() == 0, "an anchor must never hold a volume in")
         #expect(!anchor.isCurrent)
-        image.attach()
+        try image.attach()
         #expect(!anchor.isCurrent, "the same volume back at the same path is a new mount")
         #expect(MountAnchor(path: image.root)?.isCurrent == true)
     }
@@ -140,7 +188,7 @@ struct DiskImageTests {
         let stamped = ResolvedRoot(drive)?.stamp("S/C0001.MP4")
         #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive, kind: kind).verdict == .safe)
         image.detach()
-        image.attach()
+        try image.attach()
         // Only the file: a device number can change across mounts if another image attaches, and nothing relies on it.
         let after = ResolvedRoot(drive)?.stamp("S/C0001.MP4")
         #expect(after?.inode == stamped?.inode && after?.size == stamped?.size && after?.mtime == stamped?.mtime && after?.mtimeNanos == stamped?.mtimeNanos,
@@ -155,7 +203,7 @@ struct DiskImageTests {
         let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
         #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive, kind: kind).verdict == .safe)
         image.detach()
-        image.attach()
+        try image.attach()
         let again = CardReader.read(root: card, kind: kind)
         let states = CardMatcher.match(read: again, ledger: Ledger(driveRoot: drive), index: nil, driveRoot: drive, proved: out.proofs)
         #expect(states["C0001.MP4"] == .likely(drivePath: "S/C0001.MP4"), "known at once, and read again before it counts")
@@ -244,7 +292,7 @@ struct DiskImageTests {
         let d = rnd(100_000)
         put(card + "/C0001.MP4", d); put(drive + "/S/C0001.MP4", d)
         image.detach()
-        image.attach(readOnly: true)
+        try image.attach(readOnly: true)
         let read = CardReader.read(root: card, kind: kind)
         let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                      ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
@@ -261,7 +309,7 @@ struct DiskImageTests {
         _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
                                  hooks: FaultHooks(syncVolume: { _ in dying.on = true; return 0 }, journalFails: { dying.on })) { _ in }
         image.detach()
-        image.attach(readOnly: true)
+        try image.attach(readOnly: true)
         let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                      ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
         #expect(r.weak)
@@ -270,7 +318,7 @@ struct DiskImageTests {
 
     // The job that would clear a stale temp was refused for lack of the room that temp was taking.
     @Test func `A dead job's temp doesn't stop the job that clears it`() throws {
-        let card = temp(), image = try Image(size: "420m"), drive = image.root
+        let card = temp(), image = try Image(megabytes: 420), drive = image.root
         put(card + "/C0001.MP4", rnd(60_000_000))
         put(drive + "/.ingest/tmp/DEAD.0.part", rnd(250_000_000))
         let read = CardReader.read(root: card, kind: kind)

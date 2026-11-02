@@ -104,6 +104,83 @@ private func executable(_ path: String, _ text: String) throws {
     let ignore = try String(contentsOf: repo.appendingPathComponent(".gitignore"), encoding: .utf8)
 }
 
+/// The real `scripts/test.sh` around a harmless command, with its own lock, so it can run inside a test run.
+private func safety(_ command: String, env: [String: String] = [:], lock: String? = nil) throws -> (code: Int32, said: String, lock: String) {
+    let p = Process(), out = Pipe()
+    let lockPath = lock ?? (temp() + "/lock")
+    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    p.arguments = [repo.appendingPathComponent("scripts/test.sh").path]
+    p.environment = ProcessInfo.processInfo.environment.merging(
+        ["INGEST_TEST_COMMAND": command, "INGEST_TEST_LOCK": lockPath, "INGEST_TEST_START_MB": "1", "INGEST_TEST_FLOOR_MB": "1", "INGEST_TEST_DROP_MB": "99999999"].merging(env) { _, new in new }) { _, new in new }
+    p.standardOutput = out
+    p.standardError = out
+    try p.run()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return (p.terminationStatus, String(decoding: data, as: UTF8.self), lockPath)
+}
+
+private func freeMegabytes() throws -> Int {
+    let values = try FileManager.default.attributesOfFileSystem(forPath: "/private/tmp")
+    return (values[.systemFreeSize] as? Int ?? 0) >> 20
+}
+
+@Test func aRunReturnsWhatItsTestsReturned() throws {
+    let r = try safety("exit 7")
+    #expect(r.code == 7, "\(r.said)")
+    #expect(!FileManager.default.fileExists(atPath: r.lock), "it lets go when it's done")
+}
+
+@Test func aRunWontStartWithTooLittleFree() throws {
+    let mark = temp() + "/ran"
+    let r = try safety("touch \(mark)", env: ["INGEST_TEST_START_MB": "999999999"])
+    #expect(r.code == 1, "\(r.said)")
+    #expect(r.said.contains("Not starting"))
+    #expect(!FileManager.default.fileExists(atPath: mark), "nothing ran")
+}
+
+// The real thing, small: 64 MB written against a limit of 8.
+@Test func theWatchdogStopsARunThatEatsTheDisk() throws {
+    let folder = temp(), pid = folder + "/pid"
+    let r = try safety("echo $$ > \(pid); dd if=/dev/urandom of=$TMPDIR/fill bs=1m count=64 2>/dev/null; sleep 60", env: ["INGEST_TEST_DROP_MB": "8"])
+    #expect(r.code == 99, "\(r.said)")
+    #expect(r.said.contains("stopping the whole run"), "and it says why: \(r.said)")
+    #expect(r.said.contains("fell by"))
+    let child = Int32(try String(contentsOfFile: pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+    #expect(kill(child, 0) != 0, "what it started has gone too")
+}
+
+@Test func theWatchdogStopsARunBelowTheFloor() throws {
+    let r = try safety("sleep 60", env: ["INGEST_TEST_FLOOR_MB": String(try freeMegabytes() + 1000)])
+    #expect(r.code == 99, "\(r.said)")
+    #expect(r.said.contains("floor"), "\(r.said)")
+}
+
+@Test func oneRunGoesAtATime() throws {
+    let lock = temp() + "/lock", mark = temp() + "/ran"
+    try FileManager.default.createDirectory(atPath: lock, withIntermediateDirectories: true)
+    try String(getpid()).write(toFile: lock + "/pid", atomically: true, encoding: .utf8)
+    let r = try safety("touch \(mark)", lock: lock)
+    #expect(r.code == 1, "\(r.said)")
+    #expect(r.said.contains("One at a time"))
+    #expect(!FileManager.default.fileExists(atPath: mark))
+}
+
+@Test func aLockLeftByADeadRunDoesntStopTheNextOne() throws {
+    let lock = temp() + "/lock"
+    try FileManager.default.createDirectory(atPath: lock, withIntermediateDirectories: true)
+    try "999999".write(toFile: lock + "/pid", atomically: true, encoding: .utf8)
+    #expect(try safety("exit 0", lock: lock).code == 0)
+}
+
+@Test func aRunsScratchGoesWithIt() throws {
+    let note = temp() + "/where"
+    #expect(try safety("echo $TMPDIR > \(note); echo x > $TMPDIR/left").code == 0)
+    let scratch = try String(contentsOfFile: note, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(scratch.contains("ingest-test-run"))
+    #expect(!FileManager.default.fileExists(atPath: scratch))
+}
+
 // A look can't flush, so nothing may call it proof.
 @Test func theReadmeSaysALookIsWeakerThanTheApp() throws {
     let text = try String(contentsOf: repo.appendingPathComponent("README.md"), encoding: .utf8)

@@ -61,7 +61,7 @@ du -sh "$C" | cut -f1
 dd if=/dev/urandom of="$O/A001.braw" bs=1m count=4 2>/dev/null
 hdiutil detach -quiet "$O"
 cd "${0:A:h}/.."
-swift build --product IngestApp
+swift build -j 6 --product IngestApp
 rc=0
 INGEST_ALLOW_DISK_IMAGES=1 INGEST_ONLY_VOLUMES="$DRIVE:$CARD:$OTHER" INGEST_SUPPORT_DIR=$W/support INGEST_SELFTEST_CARD_IMAGE=$W/card.dmg \
   INGEST_SELFTEST_DRIVE_IMAGE=$W/drive.dmg INGEST_SELFTEST_OTHER_IMAGE=$W/other.dmg INGEST_SELFTEST_OTHER_NAME="$OTHER" \

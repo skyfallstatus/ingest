@@ -114,7 +114,7 @@ You need Swift 6.2 or later. Command Line Tools are enough, and Xcode isn't need
 
 ```sh
 swift build                       # everything
-scripts/test.sh                   # the test suite, no hardware needed. Mounts small throwaway images under /tmp
+scripts/test.sh                   # the test suite, no hardware needed. Mounts small throwaway images under /tmp, wants 150 GB free
 scripts/build-app.sh              # universal, ad-hoc signed dist/Ingest.app
 scripts/build-dmg.sh              # dist/Ingest.dmg from that app
 ```

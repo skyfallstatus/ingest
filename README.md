@@ -20,7 +20,7 @@ The app says it only when all of this is true for the card in front of you, on t
 
 **A proof doesn't outlive the plug.** Take the card or the drive out, even for a moment, and the proof ends. Put the card back in and it's recognised at once, then read in full on both sides before it can say Safe again: about 92 seconds on the 86 GB test card, from a card that reads at 939 MB/s. A file on the drive that changes loses its proof too, and is read again. As long as nothing changes and nothing comes out, opening the widget doesn't read anything in full.
 
-If a file doesn't match, the app tries once more and then says so. A file that fails never gets its real name on the drive. An ASC MHL manifest is written beside the footage, so other tools can check the copy without this app. A card that keeps its own ASC MHL history is left as it was, and stills sent to their own folder aren't in the manifest.
+If a file doesn't match, the app tries once more and then says so. A file that fails never gets its real name on the drive. An ASC MHL manifest is written beside each card it copies, so other tools can check the copy without this app. A card that was already on the drive is checked and not copied, so it gets none. A card that keeps its own ASC MHL history is left as it was, and stills sent to their own folder aren't in the manifest.
 
 ## What it doesn't promise
 
@@ -73,7 +73,7 @@ Copying and proving bytes works the same for any card. What changes by camera is
 
 ## Requirements
 
-macOS 14 or later, on Apple silicon or Intel. Only macOS 27 has been tested so far: macOS 14, 15 and 26 are untested. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
+macOS 14 or later, on Apple silicon or Intel. Only macOS 27 on Apple silicon has been tested so far: macOS 14, 15 and 26 are untested, and it has never run on an Intel Mac. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
 
 ## Installing a beta
 
@@ -104,7 +104,7 @@ Report a Bug and Suggest a Feature put your report on the clipboard and open a b
 ## What it leaves on your drive
 
 - `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: a drive that refused to confirm a copy stays on "Have a look". A copy cut off by a pulled cable or a crash doesn't: the next check reads it in full, and Copy Again or Add to carries on with whatever's left.
-- `ascmhl/`, beside each card's footage: the checksum manifest.
+- `ascmhl/`, beside each card it copies: the checksum manifest.
 
 Your cards are never written to.
 
@@ -132,7 +132,7 @@ swift build --product IngestApp && .build/debug/IngestApp --render /tmp/ingest-s
 
 Tests for a few public sample files skip cleanly if the files aren't there. Point `INGEST_SAMPLES` at a folder holding them, by default `/tmp/ingest-samples`.
 
-`ingestctl` is a small command line tool over the same engine. `ingestctl match <card> <drive> --confirm` proves a card against a drive without writing to either, and exits 0 only on Safe.
+`ingestctl` is a small command line tool over the same engine. `ingestctl match <card> <drive> --confirm` reads a card against a drive without writing to either, and exits 0 only on Safe. It's a look, and weaker than the app: it can't ask the drive to flush, so it can pass what the app would hold. See the stated limits in `docs/SAFETY.md`.
 
 ```
 Sources/IngestCore   the engine: listing, copying, proving, the verdict, camera formats, drive layouts

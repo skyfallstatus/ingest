@@ -49,6 +49,7 @@ private func executable(_ path: String, _ text: String) throws {
     for rel in ["BETA.md", "README.md", "Resources/dmg/Read Me First.txt"] {
         let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
         #expect(text.contains("macOS 14, 15 and 26 are untested"), "\(rel)")
+        #expect(text.contains("Intel"), "\(rel)")
     }
 }
 
@@ -73,6 +74,29 @@ private func executable(_ path: String, _ text: String) throws {
     let image = try #require(NSImage(contentsOf: repo.appendingPathComponent("Resources/dmg/background.tiff")))
     #expect(window - 28 >= y + 64 + 20, "the title bar takes 28, half the icon 64, and its name 20")
     #expect(Int(image.size.height) >= window - 28, "and the background has to reach the bottom")
+}
+
+// Report a Bug opens a form, and it's Open GitHub that copies the report.
+@Test func theNotesSayHowAReportReallyGoes() throws {
+    for rel in ["BETA.md", "Resources/dmg/Read Me First.txt"] {
+        let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
+        #expect(text.contains("Open GitHub copies your report") || text.contains("**Open GitHub** copies your report"), "\(rel)")
+    }
+}
+
+// A look can't flush, so nothing may call it proof.
+@Test func theReadmeSaysALookIsWeakerThanTheApp() throws {
+    let text = try String(contentsOf: repo.appendingPathComponent("README.md"), encoding: .utf8)
+    #expect(text.contains("weaker than the app"))
+    #expect(!text.contains("proves a card against a drive"))
+}
+
+// The stated limits are part of the contract with whoever reads the code.
+@Test func theLimitsNameWhatReviewFound() throws {
+    let rules = try String(contentsOf: repo.appendingPathComponent("docs/SAFETY.md"), encoding: .utf8)
+    for limit in ["exFAT and FAT32", "read-only drive", "between a flush and a read", "weak mark clears", "F_FULLFSYNC", "read cache"] {
+        #expect(rules.contains(limit), "\(limit)")
+    }
 }
 
 // The owner's decision: a cut-off job isn't on hold for good. The notes have to tell that story, and not the old one.

@@ -7,8 +7,9 @@ import Testing
 @MainActor private final class FakeEngine: UpdateEngine {
     var checksByItself = true
     var started = 0, checks = 0
+    var ignoresChecks = false
     func start() { started += 1 }
-    func check() { checks += 1 }
+    func check() -> Bool { checks += 1; return !ignoresChecks }
 }
 
 @MainActor private func updates(busy: String? = nil) -> (Updates, FakeEngine) {
@@ -35,6 +36,74 @@ import Testing
         u.readyToInstall { installs += 1 }
         #expect(u.readyLine == "Ingest 0.2 is ready")
         #expect(installs == 0, "it never restarts by itself")
+    }
+
+    @Test func `A check that's ignored doesn't stay on Checking`() {
+        let (u, e) = updates()
+        e.ignoresChecks = true
+        u.check()
+        #expect(u.state == .failed, "just after a relaunch Sparkle takes no checks, and it never says")
+        e.ignoresChecks = false
+        u.check()
+        #expect(u.state == .checking, "and it can be pressed again")
+        #expect(e.checks == 2)
+    }
+
+    @Test func `A session that ends with nothing to say doesn't stay on Checking`() {
+        let (u, _) = updates()
+        u.check()
+        u.dismissed()
+        #expect(u.state == .idle)
+    }
+
+    @Test func `Keep Copying at a restart leaves Restart to press again`() {
+        let (u, _) = updates()
+        var asks = 0
+        u.found(version: "0.2", stage: .notDownloaded) {}
+        u.readyToInstall { asks += 1 }
+        u.restart()
+        #expect(u.state == .installing("0.2"))
+        u.installing(retry: { asks += 10 })
+        u.restartRefused()
+        #expect(u.state == .ready("0.2"), "it mustn't stay on Installing")
+        #expect(u.readyLine == "Ingest 0.2 is ready")
+        u.restart()
+        #expect(asks == 11, "the second press asks to quit again")
+        #expect(u.state == .installing("0.2"))
+    }
+
+    @Test func `Keep Copying can come before Sparkle says it's installing`() {
+        let (u, _) = updates()
+        var asks = 0
+        u.found(version: "0.2", stage: .notDownloaded) {}
+        u.readyToInstall { asks += 1 }
+        u.restart()
+        u.restartRefused()
+        u.installing(retry: { asks += 10 })
+        #expect(u.state == .ready("0.2"))
+        u.restart()
+        #expect(asks == 11)
+    }
+
+    @Test func `A quit that's refused with no restart pressed changes nothing`() {
+        let (u, _) = updates()
+        var asks = 0
+        u.found(version: "0.2", stage: .notDownloaded) {}
+        u.readyToInstall { asks += 1 }
+        u.restartRefused()
+        #expect(u.state == .ready("0.2"))
+        u.restart()
+        #expect(asks == 1)
+    }
+
+    @Test func `An app already gone has nothing to ask again`() {
+        let (u, _) = updates()
+        u.found(version: "0.2", stage: .notDownloaded) {}
+        u.readyToInstall {}
+        u.restart()
+        u.installing(retry: nil)
+        u.restartRefused()
+        #expect(u.state == .ready("0.2"))
     }
 
     @Test func `An update already installing waits for Restart too`() {

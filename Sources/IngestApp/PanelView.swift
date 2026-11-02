@@ -89,7 +89,7 @@ struct PanelView: View {
     }
 }
 
-/// An update that's ready: one quiet line, and nothing happens until it's pressed.
+/// An update that's ready: one quiet line. The app only restarts when this is pressed.
 private struct UpdateLine: View {
     @Environment(AppModel.self) private var model
 

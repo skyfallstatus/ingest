@@ -113,7 +113,7 @@ If the menu bar is full, macOS can hide the card icon. Open Ingest from Applicat
 
 ## Network
 
-Once a day the app asks GitHub for the update feed, and it sends nothing but that request: no account, no profile of your Mac, no tracking. **Update by itself** in Settings turns that off, and it's on by default. If there's a new version it downloads quietly, from GitHub, and the widget says so. Nothing installs until you press Restart, and that waits for any card being copied, read or checked. Updates are checked against a signature before anything installs.
+Once a day the app asks GitHub for the update feed, and it sends nothing but that request: no account, no profile of your Mac, no tracking. **Update by itself** in Settings turns that off, and it's on by default. If there's a new version it downloads quietly, from GitHub, and the widget says so. Press Restart to install it now, which waits for any card being copied, read or checked. If you don't, it installs the next time the app quits or crashes, and the app doesn't reopen by itself. Either way it waits for the app to be gone, so it never stops a job. Updates and the feed are both checked against a signature before anything installs.
 
 Report a Bug and Suggest a Feature put your report on the clipboard and open a blank GitHub page in your browser. Nothing you typed goes to GitHub unless you paste it there and send it. The report adds the app version, macOS version, Mac family and the camera maker if a card is in. It never adds paths, file names, client names, serials or drive names.
 

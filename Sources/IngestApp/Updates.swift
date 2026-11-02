@@ -6,12 +6,15 @@ import Sparkle
 @MainActor protocol UpdateEngine: AnyObject {
     var checksByItself: Bool { get set }
     func start()
-    func check()
+    /// False if the check won't happen, which nothing else would ever say.
+    func check() -> Bool
 }
 
-/// Updates, in the widget and nowhere else. An update downloads by itself and then waits: nothing installs until someone presses
-/// Restart, and that's refused while a card is busy. It doesn't wait and restart later, because restarting ends a card's proof,
-/// so a job finishing mustn't take a fresh Safe away from someone who isn't looking.
+/// Updates, in the widget and nowhere else. An update downloads by itself and then waits for Restart, which is refused while a card
+/// is busy. It doesn't wait and restart later, because restarting ends a card's proof, so a job finishing mustn't take a fresh Safe
+/// away from someone who isn't looking. If nobody presses it, Sparkle installs it the next time the app ends, by a quit or a crash,
+/// and doesn't reopen it. That can't get in a job's way, because its installer waits for the app to be gone and a quit waits for a
+/// job like any other, so it's left to do that rather than fought.
 @MainActor @Observable final class Updates {
     enum State: Equatable { case idle, checking, upToDate, failed, downloading(String), ready(String), installing(String) }
     enum Stage { case notDownloaded, downloaded, installing }
@@ -59,7 +62,7 @@ import Sparkle
         }
         asked = true
         state = .checking
-        engine?.check()
+        if engine?.check() != true { failed() }
     }
 
     func restart() {
@@ -101,14 +104,23 @@ import Sparkle
         asked = false
     }
 
-    func installing() {
+    /// `retry` is for an app still running, which has been asked to quit and can be asked again.
+    func installing(retry: (() -> Void)?) {
+        if let retry { install = retry }
         if case .ready = state { return }
         if case .installing = state { return }
         state = .installing(version)
     }
 
+    /// A restart is a quit, and whoever's there can answer Keep Copying. The update is still here, so Restart is too. Sparkle may
+    /// not have handed over `retry` yet, and that's only a moment.
+    func restartRefused() {
+        if case .installing(let v) = state { state = .ready(v) }
+    }
+
     /// Sparkle's session ended. One that's ready is still waiting for its press, so it stays.
     func dismissed() {
+        if case .checking = state { state = .idle; asked = false }
         if case .downloading = state { state = .idle }
         if case .installing = state { state = .idle }
     }
@@ -131,7 +143,11 @@ final class SparkleEngine: NSObject, UpdateEngine, SPUUserDriver {
     }
 
     func start() { try? updater.start() }
-    func check() { updater.checkForUpdates() }
+    func check() -> Bool {
+        guard updater.canCheckForUpdates else { return false }   // just after a relaunch, in another session, or if it couldn't start
+        updater.checkForUpdates()
+        return true
+    }
     #if UPDATE_TEST
     func checkQuietly() { updater.checkForUpdatesInBackground() }
     #endif
@@ -177,7 +193,7 @@ final class SparkleEngine: NSObject, UpdateEngine, SPUUserDriver {
     }
 
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
-        updates.installing()
+        updates.installing(retry: applicationTerminated ? nil : retryTerminatingApplication)
     }
 
     func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { acknowledgement() }

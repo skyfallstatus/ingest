@@ -4,6 +4,14 @@ import IngestCore
 
 /// Only in the builds `scripts/update-e2e.sh` makes: this presses Restart for it. Real Sparkle, real relaunch, a real job.
 @MainActor enum UpdateEndToEnd {
+    private static var keepCopying = false
+
+    /// Answers Keep Copying once, at the quit a restart sends.
+    static func answersKeepCopying() -> Bool {
+        defer { keepCopying = false }
+        return keepCopying
+    }
+
     static func run(model: AppModel) {
         let env = ProcessInfo.processInfo.environment
         UpdateLog.write("launched at \(Bundle.main.bundlePath) opensOnCardIn=\(model.stores.opensOnCardIn)")
@@ -22,6 +30,13 @@ import IngestCore
                 UpdateLog.write("refused during a job on \(model.cardInTheWay ?? "nothing"): \(model.updates.readyLine ?? "") state \(model.updates.state)")
                 while model.cardInTheWay != nil { try? await Task.sleep(for: .milliseconds(100)) }
                 UpdateLog.write("the job is done")
+            }
+            if env["INGEST_UPDATE_MODE"] == "keepCopying" {
+                keepCopying = true
+                model.updates.restart()
+                while keepCopying { try? await Task.sleep(for: .milliseconds(100)) }
+                try? await Task.sleep(for: .seconds(3))
+                UpdateLog.write("kept copying: \(model.updates.line)")
             }
             UpdateLog.write("restarting")
             model.updates.restart()

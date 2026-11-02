@@ -115,9 +115,12 @@ publish
 say_ "--- a job in progress"
 rm -rf $W/drive; mkdir $W/drive
 start job
+check "the update was ready first" 'wait_for "ready: Ingest 0.2 is ready" 60'
 check "the job started" 'wait_for "job running" 60'
-check "Restart was refused during it" 'wait_for "refused during a job" 90'
-check "the app didn't restart for it" '[[ $(version) == 0.1 ]]'
+check "Restart was refused during it" 'wait_for "refused during a job on CARD" 30'
+check "and said why" 'grep -q "It can restart once CARD is done" $W/log'
+check "the app didn't restart for it" '[[ $(version) == 0.1 ]] && ! grep -q "^0.2 " $W/log'
+check "it only went after the job" 'wait_for "the job is done" 180 && grep -n "the job is done\|restarting" $W/log | head -1 | grep -q "the job is done"'
 say_ "      $(grep 'refused during' $W/log | cut -c1-110)"
 check "once the job was done it restarted" 'wait_for "^0.2 .* launched" 180'
 check "the copy finished" 'cmp -s $W/card/CLIP/big.bin $W/drive/S/CLIP/big.bin'

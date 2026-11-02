@@ -7,28 +7,24 @@ import IngestCore
     static func run(model: AppModel) {
         let env = ProcessInfo.processInfo.environment
         UpdateLog.write("launched at \(Bundle.main.bundlePath) opensOnCardIn=\(model.stores.opensOnCardIn)")
-        guard env["INGEST_UPDATE_MODE"] != "stay" else { return }
-        var job: Task<Void, Never>?
-        if env["INGEST_UPDATE_MODE"] == "job" { job = Task { await startJob(model, env) } }
         Task {
-            _ = await job?.value
-            (model.updates.engine as? SparkleEngine)?.checkQuietly()
-            var pressed = false, refused = false
+            // Just after a relaunch Sparkle looks for an unfinished install, and ignores a check while it does, so this asks until
+            // something happens. A refused update goes back to idle, and is asked for again, which is what a real Mac would do.
             while true {
-                try? await Task.sleep(for: .milliseconds(100))
-                guard case .ready = model.updates.state else { continue }
-                if !pressed { UpdateLog.write("ready: \(model.updates.readyLine ?? "")"); pressed = true }
-                if let card = model.cardInTheWay {
-                    guard !refused else { continue }
-                    model.updates.restart()
-                    UpdateLog.write("refused during a job on \(card): \(model.updates.readyLine ?? "") state \(model.updates.state)")
-                    refused = true
-                    continue
-                }
-                UpdateLog.write("restarting")
-                model.updates.restart()
-                return
+                if model.updates.state == .idle { (model.updates.engine as? SparkleEngine)?.checkQuietly() }
+                try? await Task.sleep(for: .seconds(2))
+                if case .ready = model.updates.state { break }
             }
+            UpdateLog.write("ready: \(model.updates.readyLine ?? "")")
+            if env["INGEST_UPDATE_MODE"] == "job" {
+                await startJob(model, env)          // the update is here first, so Restart is pressed in the middle of the job
+                model.updates.restart()
+                UpdateLog.write("refused during a job on \(model.cardInTheWay ?? "nothing"): \(model.updates.readyLine ?? "") state \(model.updates.state)")
+                while model.cardInTheWay != nil { try? await Task.sleep(for: .milliseconds(100)) }
+                UpdateLog.write("the job is done")
+            }
+            UpdateLog.write("restarting")
+            model.updates.restart()
         }
     }
 

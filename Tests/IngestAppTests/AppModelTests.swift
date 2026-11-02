@@ -58,13 +58,14 @@ private final class Dying: @unchecked Sendable {
 @MainActor private final class Bench {
     let model: AppModel
     let plugged = Plugged()
-    let card = temp(), a = temp(), b = temp()
+    let card = temp(), a: String, b = temp()
     lazy var cardVolume = volume(card, "CARD")
     lazy var driveA = volume(a, "DRIVE-A")
     lazy var driveB = volume(b, "DRIVE-B")
 
-    init() {
+    init(drive: String? = nil) {
         _ = setUp
+        a = drive ?? temp()
         model = AppModel()
         model.isDemo = true
         model.stores.workingDriveKey = nil
@@ -102,6 +103,182 @@ private final class Dying: @unchecked Sendable {
         await until("the copy") { c.phase == .finished && !c.isBusy }
         #expect(c.isSafe(on: model.workingDrive), "\(String(describing: c.verdict))")
         return c
+    }
+}
+
+// A copy made by a tool that drops empty folders: every file proved, four folders short. On real exFAT, as the real one was.
+private let emptyFolders = ["M4ROOT/SUB", "M4ROOT/TAKE", "SONY/PRO/LUT", "M4ROOT/GENERAL/LUT"]
+
+private final class ExFATDrive {
+    let folder = "/private/tmp/ingest-image-" + UUID().uuidString.prefix(8)
+    var dmg: String { folder + "/v.sparseimage" }
+    var root: String { folder + "/m" }
+
+    @discardableResult private func hdiutil(_ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        p.arguments = args + ["-quiet"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return -1 }
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+
+    init() throws {
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        #expect(hdiutil(["create", "-type", "SPARSE", "-size", "64m", "-fs", "ExFAT", "-volname", "ING" + UUID().uuidString.prefix(6), dmg]) == 0)
+        attach()
+    }
+    func attach(readOnly: Bool = false) { #expect(hdiutil(["attach", "-nobrowse", "-noautoopen", "-mountpoint", root, dmg] + (readOnly ? ["-readonly"] : [])) == 0) }
+    func detach() { hdiutil(["detach", root]) }
+    deinit { detach(); try? FileManager.default.removeItem(atPath: folder) }
+}
+
+@Suite("Empty folders a copy left out", .serialized) @MainActor struct MissingFolderTests {
+    /// The card's files on the drive in `Rushes/A082`, none of its empty folders, and the card settled on hold.
+    private func shortOfFolders(_ w: Bench, drive: String) async throws -> CardSession {
+        for f in emptyFolders { try FileManager.default.createDirectory(atPath: w.card + "/" + f, withIntermediateDirectories: true) }
+        for f in ["one.bin", "two.bin"] { put(drive + "/Rushes/A082/" + f, try Data(contentsOf: URL(fileURLWithPath: w.card + "/" + f))) }
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = w.model.cards[0]
+        await w.until("the hold") { !c.isMatching && !w.drive(w.driveA).isScanning && c.phase == .finished && c.isHold }
+        return c
+    }
+
+    private func tree(_ root: String) -> [String] {
+        ((try? FileManager.default.subpathsOfDirectory(atPath: root)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+    }
+
+    private func addButton(_ c: CardSession, _ w: Bench) -> LineAction? {
+        CardSheet.make(c, model: w.model).lines.flatMap(\.actions).first { if case .addFolders = $0 { true } else { false } }
+    }
+
+    @Test func `Add Folders takes a healthy card to Safe, and it stays Safe`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        let button = try #require(addButton(c, w), "\(CardSheet.make(c, model: w.model).lines.map(\.actions))")
+        #expect(button.title == "Add 4 Folders")
+        let before = tree(image.root), one = FileManager.default.contents(atPath: image.root + "/Rushes/A082/one.bin")
+        await w.model.addMissingFolders(c)
+        #expect(c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict)) \(c.issues)")
+        let added = Set(tree(image.root)).subtracting(before)
+        #expect(added == ["Rushes/A082/M4ROOT", "Rushes/A082/M4ROOT/GENERAL", "Rushes/A082/M4ROOT/GENERAL/LUT", "Rushes/A082/M4ROOT/SUB", "Rushes/A082/M4ROOT/TAKE",
+                          "Rushes/A082/SONY", "Rushes/A082/SONY/PRO", "Rushes/A082/SONY/PRO/LUT"], "folders, and nothing else: \(added)")
+        #expect(Set(before).isSubset(of: Set(tree(image.root))))
+        #expect(FileManager.default.contents(atPath: image.root + "/Rushes/A082/one.bin") == one)
+        // Another day: a new model, and new mounts.
+        let model = AppModel(), plugged = Plugged()
+        model.isDemo = true
+        model.stores.workingDriveKey = nil
+        model.findVolumes = { _, _ in plugged.now }
+        plugged.now = [(volume(w.card, "CARD"), .card), (volume(image.root, "DRIVE-A"), .drive)]
+        await model.refresh()
+        model.use(drive: model.drives[0])
+        let again = model.cards[0]
+        await w.until("the later visit") { !model.drives[0].isScanning && !again.isMatching && (again.phase == .finished || again.phase == .ready) }
+        #expect(again.isSafe(on: model.workingDrive), "\(String(describing: again.verdict))")
+    }
+
+    @Test func `One folder says so`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        for f in emptyFolders.dropFirst() { try FileManager.default.createDirectory(atPath: image.root + "/Rushes/A082/" + f, withIntermediateDirectories: true) }
+        w.model.recheck(c)
+        await w.until("the hold") { !c.isMatching && c.phase == .finished && c.isHold }
+        #expect(addButton(c, w)?.title == "Add Folder")
+    }
+
+    @Test func `The warning sits on the card's copy, and the clips line stays clean`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        let sheet = CardSheet.make(c, model: w.model)
+        #expect(sheet.line(.clips)?.mark != .look, "\(String(describing: sheet.line(.clips)))")
+        #expect(sheet.line(.clips)?.detail.isEmpty == true)
+        #expect(sheet.line(.drive)?.mark == .look)
+        #expect(sheet.line(.drive)?.detail.contains { $0.contains("4 empty folders") } == true, "\(String(describing: sheet.line(.drive)))")
+    }
+
+    @Test func `The foot says what to look at`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        let foot = CardSheet.make(c, model: w.model).bottom
+        #expect(foot.title == "Don't format")
+        #expect(foot.sentence == "Every file is on DRIVE-A. 4 empty folders aren't.", "\(foot.sentence)")
+    }
+
+    @Test func `A file at the name blocks that folder, says so, and stays on hold`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let bytes = rnd(100)
+        put(image.root + "/Rushes/A082/M4ROOT/TAKE", bytes)
+        let c = try await shortOfFolders(w, drive: image.root)
+        #expect(addButton(c, w) != nil)
+        await w.model.addMissingFolders(c)
+        #expect(!c.isSafe(on: w.model.workingDrive))
+        #expect(c.isHold)
+        #expect(FileManager.default.contents(atPath: image.root + "/Rushes/A082/M4ROOT/TAKE") == bytes, "it isn't the app's to move")
+        let line = CardSheet.make(c, model: w.model).line(.drive)
+        #expect(line?.detail.contains { $0.hasPrefix("Couldn't add TAKE.") } == true, "\(String(describing: line))")
+        var isFolder: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: image.root + "/Rushes/A082/M4ROOT/SUB", isDirectory: &isFolder) && isFolder.boolValue, "what could be made was")
+    }
+
+    @Test func `A link is refused, and nothing lands where it points`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let elsewhere = temp()
+        try FileManager.default.createDirectory(atPath: image.root + "/Rushes/A082/M4ROOT", withIntermediateDirectories: true)
+        #expect(symlink(elsewhere, image.root + "/Rushes/A082/M4ROOT/GENERAL") == 0)
+        let c = try await shortOfFolders(w, drive: image.root)
+        await w.model.addMissingFolders(c)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere).isEmpty, "rule 24")
+        #expect(c.isHold)
+        #expect(CardSheet.make(c, model: w.model).line(.drive)?.detail.contains { $0.hasPrefix("Couldn't add LUT.") } == true)
+    }
+
+    @Test func `A read-only drive gets no button, and says why`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        for f in ["one.bin", "two.bin"] { put(image.root + "/Rushes/A082/" + f, try Data(contentsOf: URL(fileURLWithPath: w.card + "/" + f))) }
+        image.detach()
+        image.attach(readOnly: true)
+        let c = try await shortOfFolders(w, drive: temp())
+        #expect(addButton(c, w) == nil)
+        await w.model.addMissingFolders(c)
+        #expect(!FileManager.default.fileExists(atPath: image.root + "/Rushes/A082/M4ROOT"))
+        #expect(CardSheet.make(c, model: w.model).line(.drive)?.detail.contains("This drive is read-only, so they can't be added here.") == true)
+    }
+
+    @Test func `Another hold means no button, and the old words`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        c.issues.append(CardIssue(severity: .hold, code: "clip.incomplete", message: "A clip looks cut short.", paths: []))
+        #expect(addButton(c, w) == nil)
+        #expect(CardSheet.make(c, model: w.model).bottom.sentence.contains("take a look first"))
+        c.issues.removeLast()
+        c.issues.append(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This drive couldn't confirm it.", paths: []))
+        #expect(addButton(c, w) == nil, "a drive that won't confirm has a bigger problem")
+        c.issues.removeLast()
+        #expect(addButton(c, w) != nil)
+    }
+
+    @Test func `A drive that changed adds nothing`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        let c = try await shortOfFolders(w, drive: image.root)
+        c.provedOn = nil
+        await w.model.addMissingFolders(c)
+        #expect(!FileManager.default.fileExists(atPath: image.root + "/Rushes/A082/M4ROOT"))
+    }
+
+    @Test func `The sentence goes once the folders are there`() async throws {
+        let image = try ExFATDrive(), w = Bench(drive: image.root)
+        put(image.root + "/Rushes/A082/M4ROOT/TAKE", Data("x".utf8))
+        let c = try await shortOfFolders(w, drive: image.root)
+        await w.model.addMissingFolders(c)
+        try FileManager.default.removeItem(atPath: image.root + "/Rushes/A082/M4ROOT/TAKE")
+        await w.model.addMissingFolders(c)
+        #expect(c.isSafe(on: w.model.workingDrive), "\(c.issues)")
+        #expect(c.folderError == nil)
     }
 }
 

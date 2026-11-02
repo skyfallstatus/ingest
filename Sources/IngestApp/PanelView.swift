@@ -174,6 +174,7 @@ private struct LineDetail: View {
         switch action {
         case .resume: model.resume(card)
         case .copyAgain: model.retry(card)
+        case .addFolders: Task { await model.addMissingFolders(card) }
         case .checkAgain: model.recheck(card)
         case .chooseFolder: Windows.shared.chooseFolder(card: card, model: model)
         case .showInFinder(let rel): model.reveal(rel, of: card)

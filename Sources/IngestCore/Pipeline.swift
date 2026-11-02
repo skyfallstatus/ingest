@@ -11,6 +11,8 @@ public struct Destination: Hashable, Sendable {
 }
 
 public enum Pipeline {
+    public static let emptyFoldersCode = "card.empty-folders"
+
     /// Per-file drive path. Cards are always kept whole: flattening breaks clips and collides names.
     /// Stills from a mixed card keep their own tree under the stills folder.
     static func drivePath(for file: CardFile, destination d: Destination, hasVideo: Bool) -> String {
@@ -129,9 +131,22 @@ public enum Pipeline {
         }
         let absent = leaves.filter { d in !homes.contains { root.isPlainFolder($0 + "/" + d) } }
         guard !absent.isEmpty else { return nil }
-        return CardIssue(severity: .hold, code: "card.empty-folders",
+        return CardIssue(severity: .hold, code: emptyFoldersCode,
                          message: "\(absent.count == 1 ? "An empty folder on the card, \((absent[0] as NSString).lastPathComponent), isn't" : "\(absent.count) empty folders on the card aren't") on the drive. Some cameras need them.",
                          paths: absent)
+    }
+
+    /// The one folder holding every file of this card at its own place. A card in two folders, or one that was renamed or
+    /// sorted by hand, has none, and nothing can say where its empty folders belong.
+    public static func home(read: CardRead, states: [String: FileState]) -> String? {
+        var home: String?
+        for f in read.listing.files {
+            guard case .verified(let drive, _, _)? = states[f.relPath], drive.hasSuffix("/" + f.relPath) else { return nil }
+            let here = String(drive.dropLast(f.relPath.count + 1))
+            guard home == nil || home == here else { return nil }
+            home = here
+        }
+        return home
     }
 
     /// Writes the manifest for what this job verified under its destination.

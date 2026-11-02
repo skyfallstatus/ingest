@@ -84,6 +84,12 @@ private func executable(_ path: String, _ text: String) throws {
     }
 }
 
+// A healthy card held for empty folders has a way out, and testers have to be told where it is.
+@Test func theNotesSayHowToAddMissingFolders() throws {
+    let beta = try String(contentsOf: repo.appendingPathComponent("BETA.md"), encoding: .utf8)
+    #expect(beta.contains("Add 4 Folders"))
+}
+
 // A look can't flush, so nothing may call it proof.
 @Test func theReadmeSaysALookIsWeakerThanTheApp() throws {
     let text = try String(contentsOf: repo.appendingPathComponent("README.md"), encoding: .utf8)

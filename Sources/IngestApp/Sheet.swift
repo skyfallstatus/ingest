@@ -18,12 +18,13 @@ enum LineMark: Equatable {
 }
 
 enum LineAction: Hashable {
-    case resume, copyAgain(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, dismiss, useDrive(id: String, name: String), setUpDrive(id: String, name: String)
+    case resume, copyAgain(Int), addFolders(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, dismiss, useDrive(id: String, name: String), setUpDrive(id: String, name: String)
 
     var title: String {
         switch self {
         case .resume: "Resume"
         case .copyAgain(let n): n == 1 ? "Copy Again" : "Copy \(n) Again"
+        case .addFolders(let n): n == 1 ? "Add Folder" : "Add \(n) Folders"
         case .checkAgain: "Check Again"
         case .chooseFolder: "Choose Folder…"
         case .showInFinder: "Show in Finder"
@@ -37,7 +38,7 @@ enum LineAction: Hashable {
     /// The fix for what's wrong, on its own line. Everything else stays quiet.
     var isFix: Bool {
         switch self {
-        case .resume, .copyAgain, .checkAgain, .useDrive, .setUpDrive: true
+        case .resume, .copyAgain, .addFolders, .checkAgain, .useDrive, .setUpDrive: true
         case .chooseFolder, .showInFinder, .notACard, .dismiss: false
         }
     }
@@ -171,6 +172,7 @@ struct CardSheet: Equatable {
         let blockers: [CardIssue]
         let clipHolds: [CardIssue]
         let driveHolds: [CardIssue]
+        let folderHold: CardIssue?      // empty folders a copy left out, which belong to the copy and not to any clip
         let notes: [CardIssue]
         let cardChanged: Bool
         let copyError: String?, nameError: String?
@@ -210,7 +212,8 @@ struct CardSheet: Equatable {
             blockers = c.issues.filter { $0.severity == .blocker }
             let holds = c.issues.filter { $0.severity == .hold }
             driveHolds = holds.filter { $0.code == "drive.weak-verify" }
-            clipHolds = holds.filter { $0.code != "drive.weak-verify" }
+            folderHold = holds.first { $0.code == Pipeline.emptyFoldersCode }
+            clipHolds = holds.filter { $0.code != "drive.weak-verify" && $0.code != Pipeline.emptyFoldersCode }
             notes = c.issues.filter { $0.severity == .note }
             cardChanged = c.failureReasons.contains { $0.hasPrefix("The card changed") }
 
@@ -223,6 +226,9 @@ struct CardSheet: Equatable {
             canName = c.phase == .ready && c.filesToGo > 0 && !hasDestination && !c.volumeGone
                 && model.workingDrive?.setup != nil
         }
+
+        /// Nothing else stands between this card and Safe.
+        var onlyFoldersMissing: Bool { folderHold != nil && driveHolds.isEmpty && clipHolds.isEmpty && !failed }
 
         /// What a job hasn't done yet. Files it took on from another folder aren't only on the card.
         var stillToGo: String { card.keptElsewhere ? "\(plural(toGo)) not in the new folder yet." : onlyHere(toGo) }
@@ -289,6 +295,9 @@ struct CardSheet: Equatable {
             let there = !s.hasDestination || s.model.workingDrive == nil
             if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : onlyHere(s.toGo), .failed, s.canName ? .copy(s.total) : nil) }
             return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
+        }
+        if s.onlyFoldersMissing, let n = s.folderHold?.paths.count {
+            return no("Every file is on \(d). \(n == 1 ? "1 empty folder isn't." : "\(n) empty folders aren't.")", .look, c.phase == .finished ? .eject : nil)
         }
         if c.isHold { return no("On \(d) and checked, but take a look first.", .look, c.phase == .finished ? .eject : nil) }
         if s.model.workingDrive == nil {
@@ -398,6 +407,17 @@ struct CardSheet: Equatable {
             }
         } else if s.hasDestination, s.toGo > 0, s.checkFailures.isEmpty {
             line.actions = [.copyAgain(s.toGo)]     // a copy that ended short continues where it was going
+        }
+        if let hold = s.folderHold, s.everythingProved {
+            line.mark = .look
+            line.detail.append(hold.message)
+            if let e = c.folderError { line.detail.append(e) }
+            line.actions = [.showInFinder(nil)]
+            if s.onlyFoldersMissing, let read = c.read, Pipeline.home(read: read, states: c.states) != nil {
+                let n = hold.paths.count
+                if IngestEngine.isReadOnly(driveRoot: drive.path) { line.detail.append("This drive is read-only, so \(n == 1 ? "it" : "they") can't be added here.") }
+                else { line.actions.insert(.addFolders(n), at: 0) }
+            }
         }
         if s.hasDestination, c.phase == .ready, s.toGo > 0 { line.actions.append(.chooseFolder) }  // or goes somewhere else, and a bad copy holding the name leaves nothing else
         return line

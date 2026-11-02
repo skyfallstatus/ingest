@@ -94,6 +94,7 @@ import UserNotifications
     var shootLabel: String?             // "Lantern Bakery Co. · 22.10.26 Spring menu", once it's been named
     var keptElsewhere = false           // a job took on files proved in another folder, so they're not only on the card
     var badCopyNote: String?            // what a rescue left where it was
+    var folderError: String?            // why an empty folder couldn't be added
     let draft = ShootDraft()
     let control = IngestControl()
 
@@ -132,7 +133,7 @@ import UserNotifications
     /// Everything a drive said about this card, gone in one step, before anything is said about another drive.
     func forgetDrive() {
         proved = [:]; states = [:]; weak = false; verdict = nil; issues = []; provedOn = nil; existingHome = nil
-        keptElsewhere = false; badCopyNote = nil
+        keptElsewhere = false; badCopyNote = nil; folderError = nil
         if !isBusy, !volumeGone { phase = .reading(done: 0, total: 0) }
     }
 }
@@ -600,6 +601,20 @@ import UserNotifications
         } catch {
             c.error = error.localizedDescription
         }
+    }
+
+    /// Makes the empty folders a copy left out, in the folder the card was proved in, and looks again. What's proved is still
+    /// proved, so the last look is all it takes. No file is written, and nothing else on the drive changes.
+    func addMissingFolders(_ c: CardSession) async {
+        guard !c.isBusy, !c.volumeGone, let drive = workingDrive, c.provedOn === drive, drive.isCurrent, let read = c.read,
+              let home = Pipeline.home(read: read, states: c.states),
+              let missing = c.issues.first(where: { $0.code == Pipeline.emptyFoldersCode })?.paths else { return }
+        let root = drive.path
+        let failed = await Task.detached(priority: .userInitiated) { IngestEngine.addFolders(missing, home: home, driveRoot: root) }.value
+        let names = failed.map { ($0 as NSString).lastPathComponent }
+        c.folderError = names.isEmpty ? nil : "Couldn't add \(names.prefix(2).joined(separator: ", "))\(names.count > 2 ? " and \(names.count - 2) more" : ""). Something on the drive has that name, or it won't take a new folder."
+        await finish(c)
+        if c.isSafe(on: drive) { announce(c, drive: drive) }
     }
 
     /// Adds what's left of a card to the folder that already holds the rest of it.

@@ -1777,6 +1777,37 @@ func aChainItCantAppendToIsLeftAlone(chain: Data) throws {
     #expect(!unfinished(Ledger(driveRoot: drive), read, "S/C0001.MP4").isEmpty)
 }
 
+private func provedStates(_ read: CardRead, in homes: (CardFile) -> String) -> [String: FileState] {
+    Dictionary(uniqueKeysWithValues: read.listing.files.map { ($0.relPath, .verified(drivePath: homes($0) + "/" + $0.relPath, hash: "1", bytes: $0.size)) })
+}
+
+@Test func aCardProvedInOneFolderHasThatHome() {
+    let card = temp()
+    put(card + "/a.bin", rnd(10)); put(card + "/C/b.bin", rnd(10))
+    let read = CardReader.read(root: card, kind: kind)
+    #expect(Pipeline.home(read: read, states: provedStates(read) { _ in "Shoot/A" }) == "Shoot/A")
+}
+
+@Test func aCardInTwoFoldersOrOutOfShapeHasNoHome() {
+    let card = temp()
+    put(card + "/a.bin", rnd(10)); put(card + "/C/b.bin", rnd(10))
+    let read = CardReader.read(root: card, kind: kind)
+    #expect(Pipeline.home(read: read, states: provedStates(read) { $0.name == "a.bin" ? "One" : "Two" }) == nil, "there's no saying which one")
+    var renamed = provedStates(read) { _ in "Shoot/A" }
+    renamed["a.bin"] = .verified(drivePath: "Shoot/A/renamed.bin", hash: "1", bytes: 10)
+    #expect(Pipeline.home(read: read, states: renamed) == nil, "a file that isn't in its place says the tree isn't there")
+    var missing = provedStates(read) { _ in "Shoot/A" }
+    missing["a.bin"] = .missing
+    #expect(Pipeline.home(read: read, states: missing) == nil)
+}
+
+@Test func foldersLeadingOffTheDriveAreRefused() {
+    let drive = temp()
+    #expect(IngestEngine.addFolders(["../out", ".ingest/x"], home: "S", driveRoot: drive) == ["../out"])
+    #expect(!fm.fileExists(atPath: (drive as NSString).deletingLastPathComponent + "/out"))
+    #expect(IngestEngine.addFolders(["x"], home: ".ingest", driveRoot: drive) == ["x"], "and the app's own folder isn't a home")
+}
+
 // Nothing a person reads talks about flushes or caches.
 @Test func theWordsOnAHoldAreForAPerson() {
     let message = Pipeline.settle(issues: [], states: [:], weak: true, driveRoot: "/x")[0].message.lowercased()

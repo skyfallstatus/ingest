@@ -414,6 +414,22 @@ public enum IngestEngine {
         unlink(ns.deletingLastPathComponent + "/._" + ns.lastPathComponent)
     }
 
+    /// Asked of the drive as it is now. A volume can go read-only long after it was mounted.
+    public static func isReadOnly(driveRoot: String) -> Bool { ResolvedRoot(driveRoot)?.isReadOnly == true }
+
+    /// Makes a card's empty folders inside `home`, by the rules a job's folders go by. Returns the ones it couldn't.
+    public static func addFolders(_ folders: [String], home: String, driveRoot: String) -> [String] {
+        guard let root = ResolvedRoot(driveRoot) else { return folders }
+        var made = Set<String>()
+        let failed = folders.filter { folder in
+            let rel = home + "/" + folder
+            guard Ledger.isInsideDrive(rel) else { return true }
+            return (try? makeDir(rel, root: root, made: &made)) == nil
+        }
+        for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
+        return failed
+    }
+
     static func makeDir(_ rel: String, root: ResolvedRoot, made: inout Set<String>) throws {
         guard !rel.isEmpty, rel != ".", !made.contains(rel) else { return }
         var built = ""

@@ -146,6 +146,6 @@ Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-All rights reserved during private beta. There's no open source licence yet.
+MIT. See [LICENSE](LICENSE). What this project includes from others is credited in [NOTICE](NOTICE).
 
 Third-party credits are in [NOTICE](NOTICE).

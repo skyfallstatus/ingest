@@ -90,6 +90,20 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(beta.contains("Add 4 Folders"))
 }
 
+@Test func theLicenceIsTheSameEverywhere() throws {
+    func text(_ rel: String) throws -> String { try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8) }
+    let licence = try text("LICENSE")
+    #expect(licence.hasPrefix("MIT License\n\nCopyright (c) 2026 skyfallstatus\n"))
+    #expect(licence.contains("Permission is hereby granted, free of charge"))
+    #expect(try text("README.md").contains("MIT. See [LICENSE](LICENSE)"))
+    #expect(try text("NOTICE").contains("Licensed under the MIT License"))
+    for rel in ["README.md", "NOTICE"] { #expect(try !text(rel).contains("All rights reserved"), "\(rel)") }
+}
+
+@Test func theIgnoreFileSaysNothingAboutHowThisWasMade() throws {
+    let ignore = try String(contentsOf: repo.appendingPathComponent(".gitignore"), encoding: .utf8)
+}
+
 // A look can't flush, so nothing may call it proof.
 @Test func theReadmeSaysALookIsWeakerThanTheApp() throws {
     let text = try String(contentsOf: repo.appendingPathComponent("README.md"), encoding: .utf8)

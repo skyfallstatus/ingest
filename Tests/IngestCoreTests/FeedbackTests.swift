@@ -98,7 +98,7 @@ struct UpdateCheckTests {
     }
 
     @Test func `Both addresses come from the one repo URL, and only ever go to GitHub`() {
-        #expect(UpdateCheck.requestURL?.absoluteString == "https://api.github.com/repos/skyfallstatus/card-ingest/releases/latest")
+        #expect(UpdateCheck.requestURL?.absoluteString == "https://api.github.com/repos/skyfallstatus/ingest/releases/latest")
         #expect(UpdateCheck.releasePage?.absoluteString == AppInfo.repoURL + "/releases/latest")
     }
 }

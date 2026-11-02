@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "card-ingest",
+    name: "ingest",
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "CIngest"),

@@ -329,7 +329,7 @@ struct ShootForm: View {
             // A reused card may hold a new shoot, so the fields above stay on offer beside this.
             if let existingShoot {
                 Button("Add to \(CardSheet.homeLabel(existingShoot, setup: composer.setup).components(separatedBy: " / ").last ?? existingShoot)") {
-                    model.start(card, destination: Destination(footageRoot: existingShoot))
+                    model.add(card, to: existingShoot)
                 }
                 .lineLimit(1).help(existingShoot)
             }

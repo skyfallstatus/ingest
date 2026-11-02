@@ -430,7 +430,6 @@ private final class Dying: @unchecked Sendable {
         let choose = try #require(sheet.line(.drive)?.actions.first { $0 == .chooseFolder }, "\(sheet.lines.map(\.actions))")
         #expect(choose.title == "Choose Folder…")
         #expect(sheet.line(.readDrive)?.detail.contains("Choose another folder, or remove the bad copy and copy again.") == true, "\(said(c, w))")
-        #expect(w.model.folderQuestion(c).contains("the rest of"), "what's proved stays put, so the card isn't kept whole")
 
         w.model.copy(c, into: "Elsewhere")      // what the button does once the panel has a folder
         await w.until("the copy") { c.phase == .finished && !c.isBusy }
@@ -441,7 +440,6 @@ private final class Dying: @unchecked Sendable {
     @Test func `Copy into a folder never lands on a name that's taken`() async throws {
         let w = Bench()
         let c = await w.ready()
-        #expect(w.model.folderQuestion(c).contains("kept whole"))
         try FileManager.default.createDirectory(atPath: w.a + "/Shoot/CARD", withIntermediateDirectories: true)
         await w.model.refresh()
         w.drive(w.driveA).index = DriveIndex.scan(root: w.a)
@@ -576,6 +574,300 @@ private final class Dying: @unchecked Sendable {
         #expect(c.error?.contains("unplugged") == true)
         let foot = CardSheet.make(c, model: w.model).bottom.sentence
         #expect(foot == "2 files not proved yet.", "\(foot)")
+    }
+
+    /// The same card and drive on another day: a new model, and new mounts.
+    private func laterVisit(_ w: Bench) async -> (AppModel, CardSession) {
+        let model = AppModel(), plugged = Plugged()
+        model.isDemo = true
+        model.stores.workingDriveKey = nil
+        model.findVolumes = { _, _ in plugged.now }
+        plugged.now = [(volume(w.card, "CARD"), .card), (volume(w.a, "DRIVE-A"), .drive)]
+        await model.refresh()
+        model.use(drive: model.drives[0])
+        let c = model.cards[0]
+        await w.until("the later visit") { !model.drives[0].isScanning && !c.isMatching && (c.phase == .finished || c.phase == .ready) }
+        return (model, c)
+    }
+
+    /// A clip and a still, so the card reads as footage.
+    private func mixedCard(_ w: Bench) { put(w.card + "/DCIM/A.JPG", rnd(2_000_000)); put(w.card + "/CLIP/A.MP4", rnd(2_000_000)) }
+
+    @Test func `A rescue copies the whole card to the new folder, and Safe names that folder`() async throws {
+        let w = Bench()
+        let (c, bad) = try await stuckOnABadCopy(w)
+        let good = FileManager.default.contents(atPath: w.a + "/Sorted/two.bin")
+        w.model.retry(c)                        // the same folder again isn't a rescue
+        await w.until("the retry") { !c.isBusy && CardSheet.make(c, model: w.model).line(.readDrive)?.detail.isEmpty == false }
+        #expect(c.badCopyNote == nil, "\(String(describing: c.badCopyNote))")
+        c.shootLabel = "Old Client / Old Shoot"
+        w.model.copy(c, into: "Elsewhere")
+        await w.until("the copy") { c.phase == .finished && !c.isBusy }
+        #expect(c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict))")
+        for f in ["one.bin", "two.bin"] { #expect(FileManager.default.fileExists(atPath: w.a + "/Elsewhere/CARD/" + f), "\(f)") }
+        #expect(c.destinationPath == "Elsewhere/CARD")
+        #expect(CardSheet.make(c, model: w.model).path?.contains("Old Shoot") != true, "\(String(describing: CardSheet.make(c, model: w.model).path))")
+        let manifest = try #require(try FileManager.default.contentsOfDirectory(atPath: w.a + "/Elsewhere/CARD/ascmhl").first { $0.hasSuffix(".mhl") })
+        let text = try String(contentsOfFile: w.a + "/Elsewhere/CARD/ascmhl/" + manifest, encoding: .utf8)
+        #expect(text.contains("one.bin") && text.contains("two.bin"))
+        #expect(FileManager.default.contents(atPath: w.a + "/Sorted/one.bin") == bad, "the old folder is left alone")
+        #expect(FileManager.default.contents(atPath: w.a + "/Sorted/two.bin") == good)
+        #expect(said(c, w).contains("A bad copy of one.bin is still in Sorted."), "\(said(c, w))")
+        // Next time it's plugged in, the good copy is the one that counts.
+        let (model, again) = await laterVisit(w)
+        #expect(again.isSafe(on: model.workingDrive), "\(String(describing: again.verdict))")
+    }
+
+    @Test func `After a rescue the card's home is the new folder, not the one with the bad copy`() async throws {
+        let w = Bench()
+        var bad = rnd(2_000_000)
+        put(w.card + "/DCIM/A.JPG", bad)
+        let job = Pipeline.makeJob(read: CardReader.read(root: w.card) { _ in .still }, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "Old"), probe: ProbeResult(hasVideo: true), index: nil)
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.a), control: IngestControl()) { _ in }
+        bad[1_000_000] ^= 0xFF
+        put(w.a + "/Old/DCIM/A.JPG", bad)           // a copy with a record, gone bad since
+        let c = await w.ready()
+        await w.until("the check") { !c.isMatching && c.phase == .ready && c.filesToGo == 1 }
+        #expect(c.existingHome == nil || c.existingHome == "Old")
+        w.model.start(c, destination: Destination(footageRoot: "Rescue"))
+        await w.until("the rescue") { c.phase == .finished && !c.isBusy }
+        #expect(c.isSafe(on: w.model.workingDrive), "\(String(describing: c.verdict))")
+        #expect(c.existingHome == "Rescue", "\(String(describing: c.existingHome))")
+        let (model, again) = await laterVisit(w)
+        #expect(again.isSafe(on: model.workingDrive), "the older copy can't take it back: \(String(describing: again.verdict))")
+        #expect(again.existingHome == "Rescue", "\(String(describing: again.existingHome))")
+    }
+
+    @Test func `A stopped rescue isn't Safe until the whole card is in the new folder`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.safe()
+        c.pendingDestination = nil
+        c.phase = .ready
+        w.model.copy(c, into: "Elsewhere")
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        #expect(c.verifiedFiles <= c.totalFiles, "\(c.verifiedFiles) of \(c.totalFiles)")
+        w.model.stop(c)
+        await w.until("it to stop") { c.phase == .stopped }
+        #expect(c.filesToGo > 0, "what isn't in the new folder yet is still to go")
+        let foot = CardSheet.make(c, model: w.model).bottom.sentence
+        #expect(foot.hasSuffix("not in the new folder yet."), "they aren't only on the card: \(foot)")
+        w.model.resume(c)
+        await w.until("the rest") { c.phase == .finished && !c.isBusy }
+        #expect(c.isSafe(on: w.model.workingDrive))
+        let there = try FileManager.default.subpathsOfDirectory(atPath: w.a + "/Elsewhere/CARD").filter { $0.hasSuffix(".bin") }
+        #expect(there.count == 3, "\(there)")
+    }
+
+    @Test func `The Copy button counts what the job will copy`() async throws {
+        let w = Bench()
+        let other = temp()
+        let shared = try Data(contentsOf: URL(fileURLWithPath: w.card + "/one.bin"))
+        put(other + "/one.bin", shared)
+        let read = CardReader.read(root: other) { _ in .video }
+        let job = Pipeline.makeJob(read: read, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "Earlier"), probe: ProbeResult(hasVideo: true), index: nil)
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.a), control: IngestControl()) { _ in }
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        let live = w.drive(w.driveA)
+        live.setup = ShootPlanner.presets()[0].setup
+        w.model.use(drive: live)
+        let c = w.model.cards[0]
+        await w.until("the check") { !live.isScanning && !c.isMatching && c.phase == .ready && c.filesToGo == 1 }
+        #expect(CardSheet.make(c, model: w.model).bottom.action == .copy(2), "a new folder gets the whole card")
+    }
+
+    @Test func `A second card isn't offered the first card's folder`() async throws {
+        let w = Bench()
+        let marker = rnd(1_382_400)
+        put(w.card + "/AVF_INFO/AVIN0001.BNP", marker); put(w.card + "/DCIM/C0001.JPG", rnd(2_000_000))
+        let first = await w.safe()
+        #expect(first.isSafe(on: w.model.workingDrive))
+        let second = temp()
+        put(second + "/AVF_INFO/AVIN0001.BNP", marker); put(second + "/DCIM/C0002.JPG", rnd(2_000_000))
+        let live = w.drive(w.driveA)
+        live.setup = ShootPlanner.presets()[0].setup
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive), (volume(second, "SECOND"), .card)]
+        await w.model.refresh()
+        let c = try #require(w.model.cards.first { $0 !== first })
+        await w.until("the check") { !c.isMatching && c.phase == .ready && c.filesToGo == 1 }
+        #expect(c.existingHome == nil, "\(String(describing: c.existingHome))")
+        #expect(CardSheet.make(c, model: w.model).existingShoot == nil)
+    }
+
+    @Test func `Add to keeps a card's stills where they went`() async throws {
+        let w = Bench()
+        mixedCard(w)
+        put(w.card + "/CLIP/B.MP4", rnd(2_000_000))
+        let read = CardReader.read(root: w.card) { CardProber.kind(ofRelativePath: $0) }
+        let job = Pipeline.makeJob(read: read, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "Foot/A", stillsRoot: "Stills/A"),
+                                   probe: ProbeResult(hasVideo: true, hasStills: true), index: nil)
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.a), control: IngestControl()) { _ in }
+        put(w.card + "/CLIP/C.MP4", rnd(2_000_000))     // what's left of this card
+        let c = await w.ready()
+        await w.until("the check") { !c.isMatching && c.phase == .ready && c.filesToGo == 1 }
+        w.model.add(c, to: try #require(c.existingHome))
+        await w.until("the copy") { !c.isBusy && c.filesToGo == 0 }
+        #expect(FileManager.default.fileExists(atPath: w.a + "/Foot/A/CLIP/C.MP4"))
+        #expect(!FileManager.default.fileExists(atPath: w.a + "/Foot/A/DCIM/A.JPG"), "it's already at its place, under Stills")
+    }
+
+    // A job can see the drive go, and stop, before the app has looked at all.
+    @Test func `A card pulled after its job stopped for the drive keeps its warning`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card), (w.driveB, .drive)]
+        await w.model.refresh()
+        await w.until("it to stop") { c.phase == .stopped }
+        c.volume.anchor?.retire()
+        w.plugged.now = [(w.driveB, .drive)]
+        await w.model.refresh()
+        #expect(w.model.cards.contains { $0 === c }, "the session goes, and the warning with it")
+        #expect(c.volumeGone)
+    }
+
+    @Test func `A look landing after a card is pulled can't bring back what needs the card`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        c.pendingDestination = Destination(footageRoot: "S"); c.destinationPath = "S"
+        let gate = Dying()
+        w.model.lookLandsLate = { _ in while !gate.now { try? await Task.sleep(for: .milliseconds(5)) } }
+        Task { await w.model.matchCard(c) }
+        try await Task.sleep(for: .milliseconds(200))
+        c.volume.anchor?.retire()
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        gate.now = true
+        await w.until("the look") { !c.isMatching }
+        try await Task.sleep(for: .milliseconds(100))
+        w.model.lookLandsLate = nil
+        #expect(c.phase == .stopped, "\(c.phase)")
+        #expect(CardSheet.make(c, model: w.model).line(.drive)?.actions == [.dismiss])
+    }
+
+    @Test func `A job that fails with the card gone keeps the card's warning`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        try FileManager.default.createDirectory(atPath: w.a + "/.ingest/ledger", withIntermediateDirectories: true)
+        chmod(w.a + "/.ingest/ledger", 0o555)       // the job can't open its record, so it throws
+        defer { chmod(w.a + "/.ingest/ledger", 0o755) }
+        let pulled = "CARD was removed while copying."
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        c.volumeGone = true; c.error = pulled
+        await w.until("the job to fail") { !c.isBusy }
+        #expect(c.error == pulled, "\(String(describing: c.error))")
+        #expect(c.phase == .stopped, "\(c.phase)")
+    }
+
+    @Test func `A queued card isn't told to plug in a drive that's plugged in`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let other = temp()
+        put(other + "/x.bin", rnd(1000))
+        let otherVolume = volume(other, "OTHER")
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card), (w.driveA, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = try #require(w.model.cards.first { $0.volume.path == w.card })
+        let o = try #require(w.model.cards.first { $0 !== c })
+        await w.until("both cards") { o.phase == .ready && !o.isMatching && c.phase == .ready && !c.isMatching }
+        w.model.start(c, destination: Destination(footageRoot: "A"))
+        w.model.start(o, destination: Destination(footageRoot: "B"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card)]
+        await w.model.refresh()
+        let back = volume(w.a, "DRIVE-A")
+        w.model.stores.workingDriveKey = back.key
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card), (back, .drive)]
+        await w.model.refresh()
+        await w.until("both idle") { !c.isBusy && !o.isBusy }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(o.error == nil, "\(String(describing: o.error))")
+    }
+
+    @Test func `A queued card hears the drive went, and forgets it when it's back`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let other = temp()
+        put(other + "/x.bin", rnd(1000))
+        let otherVolume = volume(other, "OTHER")
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card), (w.driveA, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = try #require(w.model.cards.first { $0.volume.path == w.card })
+        let o = try #require(w.model.cards.first { $0 !== c })
+        await w.until("both cards") { o.phase == .ready && !o.isMatching && c.phase == .ready && !c.isMatching }
+        w.model.start(c, destination: Destination(footageRoot: "A"))
+        w.model.start(o, destination: Destination(footageRoot: "B"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card)]
+        await w.model.refresh()
+        await w.until("both stopped") { !c.isBusy && !o.isBusy }
+        #expect(o.error == "Plug in your working drive to carry on.", "\(String(describing: o.error))")
+        #expect(w.model.notified.contains("Don't format OTHER"), "\(w.model.notified)")
+        let back = volume(w.a, "DRIVE-A")
+        w.model.stores.workingDriveKey = back.key
+        w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card), (back, .drive)]
+        await w.model.refresh()
+        #expect(o.error == nil, "\(String(describing: o.error))")
+    }
+
+    @Test func `Only a copy that's really bad is called bad`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        w.drive(w.driveA).setup = ShootPlanner.presets()[0].setup
+        c.pendingDestination = Destination(footageRoot: "S"); c.destinationPath = "S"
+        let hint = "Choose another folder, or remove the bad copy and copy again."
+        func detail() -> [String] { CardSheet.make(c, model: w.model).line(.readDrive)?.detail ?? [] }
+        c.states["one.bin"] = .failed("the copy on the drive doesn't match the card")
+        #expect(detail().contains(hint))
+        c.states["one.bin"] = .failed("the copy didn't match the card")     // the job's own read-back, so nothing is on the drive
+        #expect(!detail().contains(hint), "\(detail())")
+        c.states["one.bin"] = .failed("checking failed: Input/output error")
+        #expect(!detail().contains(hint), "\(detail())")
+        #expect(detail().first == "one.bin couldn't be read back, from the card or the drive.", "\(detail())")
+        c.states["one.bin"] = .failed("the copy on the drive doesn't match the card")
+        c.phase = .stopped
+        #expect(!detail().contains(hint), "there's no button for it on a stopped card")
+    }
+
+    @Test func `A file in the way says what to do`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        w.drive(w.driveA).setup = ShootPlanner.presets()[0].setup
+        c.pendingDestination = Destination(footageRoot: "S"); c.destinationPath = "S"
+        c.states["one.bin"] = .failed("a different file already has that name on the drive")
+        let detail = CardSheet.make(c, model: w.model).line(.drive)?.detail ?? []
+        #expect(detail.contains("Choose another folder, or remove that file if it's a bad copy, and copy again."), "\(detail)")
+    }
+
+    @Test func `A card that's out isn't still to check`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        c.states["one.bin"] = .likely(drivePath: "S/one.bin")
+        c.phase = .stopped
+        c.volumeGone = true
+        let foot = CardSheet.make(c, model: w.model).bottom.sentence
+        #expect(foot == "Stopped. 2 files not proved yet.", "\(foot)")
+    }
+
+    @Test func `A drive pulled during a copy tells someone`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card), (w.driveB, .drive)]
+        await w.model.refresh()
+        await w.until("it to stop") { !c.isBusy }
+        #expect(w.model.notified.contains { $0.contains("Don't format") }, "\(w.model.notified)")
     }
 
     /// A copy under way, with the card pulled from under it.

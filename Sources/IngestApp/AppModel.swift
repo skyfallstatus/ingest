@@ -92,6 +92,8 @@ import UserNotifications
     var checkStarted: Date?
     var existingHome: String?
     var shootLabel: String?             // "Lantern Bakery Co. · 22.10.26 Spring menu", once it's been named
+    var keptElsewhere = false           // a job took on files proved in another folder, so they're not only on the card
+    var badCopyNote: String?            // what a rescue left where it was
     let draft = ShootDraft()
     let control = IngestControl()
 
@@ -130,6 +132,7 @@ import UserNotifications
     /// Everything a drive said about this card, gone in one step, before anything is said about another drive.
     func forgetDrive() {
         proved = [:]; states = [:]; weak = false; verdict = nil; issues = []; provedOn = nil; existingHome = nil
+        keptElsewhere = false; badCopyNote = nil
         if !isBusy, !volumeGone { phase = .reading(done: 0, total: 0) }
     }
 }
@@ -221,7 +224,7 @@ import UserNotifications
         for c in cards where !stillHere(c.volume) && !c.ejected && !c.volumeGone {
             // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too, and
             // so does one already being read again, because losing the card is what took its proof.
-            let settling = switch c.phase { case .ready, .reading, .checking: true; default: false }
+            let settling = switch c.phase { case .ready, .reading, .checking: true; case .stopped: c.driveWentAway; default: false }
             let cutShort = settling && c.pendingDestination != nil && c.filesToGo > 0
             if c.phase == .copying || cutShort {
                 let pulled = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
@@ -533,7 +536,7 @@ import UserNotifications
             return Pipeline.conclude(read: read, states: states, proved: proved, issues: issues, driveRoot: root, kind: Self.kind)
         }.value
         await lookLandsLate?(look)
-        guard look == c.looks, !c.isBusy, c.provedOn === drive, workingDrive === drive else { return }
+        guard look == c.looks, !c.isBusy, !c.volumeGone, c.provedOn === drive, workingDrive === drive else { return }
         c.issues = end.issues; c.states = end.states; c.verdict = end.verdict
         c.proved = c.proved.filter { if case .verified? = end.states[$0.key] { true } else { false } }
         c.phase = (c.isSafe || c.isHold || c.isEmpty) ? .finished : .ready
@@ -579,6 +582,11 @@ import UserNotifications
             c.forgetDrive()
             c.provedOn = drive
         }
+        // A rescue leaves a bad copy where it is, and whoever opens that folder should be told.
+        if let old = c.pendingDestination?.footageRoot ?? c.existingHome, old != destination.footageRoot,
+           let bad = c.read?.listing.files.first(where: { c.states[$0.relPath]?.isBadCopyOnDrive == true }) {
+            c.badCopyNote = "A bad copy of \(bad.name) is still in \(CardSheet.homeLabel(old, setup: drive.setup))."
+        }
         for (rel, state) in c.states { if case .failed = state { c.states[rel] = .missing } }     // this job says what becomes of them
         do {
             try IngestEngine.preflight(job: job(for: c, read: read, drive: drive, destination: destination, extraFolders: extraFolders), ledger: drive.ledger)
@@ -594,12 +602,10 @@ import UserNotifications
         }
     }
 
-    /// What's asked over the folder panel. A file already proved isn't copied again, so only an untouched card stays whole.
-    func folderQuestion(_ card: CardSession) -> String {
-        let drive = workingDrive?.name ?? "the drive"
-        let started = card.states.values.contains { if case .verified = $0 { true } else { false } }
-        return started ? "Choose where the rest of \(card.name) goes on \(drive). What's already proved stays where it is."
-                       : "Choose where \(card.name) goes on \(drive). The card is kept whole, in its own folder."
+    /// Adds what's left of a card to the folder that already holds the rest of it.
+    func add(_ card: CardSession, to home: String) {
+        let stills = CardMatcher.existingHome(states: card.states, files: card.read?.listing.files ?? [], kinds: [.still])
+        start(card, destination: Destination(footageRoot: home, stillsRoot: stills))
     }
 
     /// Copies a card into a new folder of its own inside `folder`, a path on the working drive.
@@ -610,6 +616,7 @@ import UserNotifications
         let taken = reserved(besides: card)
         func free(_ path: String) -> Bool { drive.existing(path) == nil && !taken.contains(matchKey(path)) }
         while !free(folder.isEmpty ? name : folder + "/" + name) { name = "\(base) \(n)"; n += 1 }
+        card.shootLabel = nil       // that was the name of where it was going
         start(card, destination: Destination(footageRoot: folder.isEmpty ? name : folder + "/" + name))
     }
 
@@ -637,7 +644,10 @@ import UserNotifications
     }
 
     private func pumpQueue() {
-        guard !queueRunning, let c = queue.first else { return }
+        guard !queueRunning, let c = queue.first else {
+            if !queueRunning { chooseWorkingDrive() }       // nothing was allowed to change it while a job ran
+            return
+        }
         queueRunning = true
         queue.removeFirst()
         Task { await self.run(c) }
@@ -668,7 +678,12 @@ import UserNotifications
     private func run(_ c: CardSession) async {
         // The job waited its turn, so it goes to the drive it was set up for, or nowhere.
         guard let drive = workingDrive, c.provedOn === drive, drive.isCurrent, let read = c.read, let destination = c.pendingDestination else {
-            c.error = "Plug in your working drive to carry on."
+            // The saved drive can be back already, and only waiting for the job that was unwinding.
+            if workingDrive == nil, !drives.contains(where: { $0.volume.key == stores.workingDriveKey }) {
+                c.error = "Plug in your working drive to carry on."
+                c.driveWentAway = true
+                notify(title: "Don't format \(c.name)", body: "Your working drive went before this card was copied.")
+            }
             c.phase = .stopped
             queueRunning = false
             pumpQueue()
@@ -677,6 +692,10 @@ import UserNotifications
         keepAwake()
         defer { letSleep() }
         let job = job(for: c, read: read, drive: drive, destination: destination, extraFolders: c.extraFolders)
+        // Proved somewhere else isn't proved here. The job says what becomes of these, and a stopped one owes them still.
+        for rel in job.items.map(\.file.relPath) {
+            if case .verified? = c.states[rel] { c.states[rel] = .missing; c.proved[rel] = nil; c.keptElsewhere = true }
+        }
         c.progress = nil
         c.liveBytes = 0
         c.liveChecked = 0
@@ -711,8 +730,8 @@ import UserNotifications
 
         switch result {
         case .failure(let e):
-            c.error = e.localizedDescription
-            c.phase = .ready
+            if !c.volumeGone { c.error = e.localizedDescription }     // the card's own warning matters more
+            c.phase = c.volumeGone ? .stopped : .ready
         case .success(let done):
             let out = done.outcome
             c.proved = done.proved
@@ -728,6 +747,7 @@ import UserNotifications
             else { c.phase = .ready }
             remember(c, job: job, drive: drive, outcome: done.verdict)
             if c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
+            else if driveGone { if !c.volumeGone { notify(title: "Don't format \(c.name)", body: "\(drive.name) was unplugged before every file was proved.") } }
             else if !out.cancelled { notify(title: "\(c.name) needs a look", body: "Some files didn't copy. Don't format it.") }
             refreshIndex(drive)
         }

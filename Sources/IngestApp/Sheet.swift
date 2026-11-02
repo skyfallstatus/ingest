@@ -224,6 +224,9 @@ struct CardSheet: Equatable {
                 && model.workingDrive?.setup != nil
         }
 
+        /// What a job hasn't done yet. Files it took on from another folder aren't only on the card.
+        var stillToGo: String { card.keptElsewhere ? "\(plural(toGo)) not in the new folder yet." : onlyHere(toGo) }
+
         var failed: Bool {
             guard !working else { return false }
             return !readProblems.isEmpty || !copyFailures.isEmpty || !checkFailures.isEmpty || !blockers.isEmpty
@@ -261,15 +264,15 @@ struct CardSheet: Equatable {
         case .checking(let done, let total):
             return no("Checking \(done) of \(total) already on \(d).", .notDone, .stop)
         case .queued:
-            return no(onlyHere(s.toGo), .notDone, .stop)
+            return no(s.stillToGo, .notDone, .stop)
         case .copying:
-            return no(s.toGo == 0 ? "Making sure \(d) has finished writing." : onlyHere(s.toGo), .notDone, .stop)
+            return no(s.toGo == 0 ? "Making sure \(d) has finished writing." : s.stillToGo, .notDone, .stop)
         case .stopped:
-            let unread = c.states.values.reduce(0) { if case .likely = $1 { $0 + 1 } else { $0 } }
-            if unread > 0 { return no("Stopped. \(plural(unread)) still to check.", s.failed ? .failed : .notDone) }
             // With the card or the drive gone, all that can be said is what's not proved. Most of it may well be on the drive.
             let gone = c.volumeGone || s.model.workingDrive == nil
-            return no(gone ? "Stopped. \(plural(s.toGo)) not proved yet." : "Stopped. \(onlyHere(s.toGo))", s.failed ? .failed : .notDone)
+            let unread = c.states.values.reduce(0) { if case .likely = $1 { $0 + 1 } else { $0 } }
+            if !gone, unread > 0 { return no("Stopped. \(plural(unread)) still to check.", s.failed ? .failed : .notDone) }
+            return no(gone ? "Stopped. \(plural(s.toGo)) not proved yet." : "Stopped. \(s.stillToGo)", s.failed ? .failed : .notDone)
         case .ready, .finished:
             break
         }
@@ -279,19 +282,19 @@ struct CardSheet: Equatable {
         if s.failed {
             if !s.checkFailures.isEmpty, s.copyFailures.isEmpty {
                 // A bad copy already on the drive is exactly when a real one is needed, so the form keeps its button.
-                return no("\(plural(s.checkFailures.count)) didn't match.", .failed, s.canName ? .copy(s.toGo) : nil)
+                return no("\(plural(s.checkFailures.count)) didn't match.", .failed, s.canName ? .copy(s.total) : nil)
             }
             // What can be read can still be rescued, so the form that's open keeps its button.
             // With nowhere it was going, or no drive to go on, what failed may well be a copy that's there.
             let there = !s.hasDestination || s.model.workingDrive == nil
-            if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : onlyHere(s.toGo), .failed, s.canName ? .copy(s.toGo) : nil) }
+            if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : onlyHere(s.toGo), .failed, s.canName ? .copy(s.total) : nil) }
             return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
         }
         if c.isHold { return no("On \(d) and checked, but take a look first.", .look, c.phase == .finished ? .eject : nil) }
         if s.model.workingDrive == nil {
             return no("\(plural(s.total)) on this card. \(s.model.drives.isEmpty ? "Plug in your working drive." : "Choose a working drive.")")
         }
-        return no(onlyHere(s.toGo), .notDone, s.canName ? .copy(s.toGo) : nil)
+        return no(onlyHere(s.toGo), .notDone, s.canName ? .copy(s.total) : nil)     // the form starts a new folder, so that's the whole card
     }
 
     /// What ran, in the verdict's own sentence. Nothing here claims a clip was played.
@@ -372,6 +375,7 @@ struct CardSheet: Equatable {
         if s.everythingProved {
             line.mark = .done
             if s.shortDrive != s.driveName { line.detail = [s.driveName] }  // whatever the line had room for, the name is said
+            if let note = c.badCopyNote { line.detail.append(note) }
         }
         if drive.setup == nil, !s.hasDestination, s.toGo > 0 {
             line.detail = ["\(drive.name) isn't set up yet."]
@@ -389,6 +393,9 @@ struct CardSheet: Equatable {
             line.disagrees = true
             line.detail = ["\(first.file.name)\(more > 0 ? " and \(more) more" : ""): \(first.why)"]
             line.actions = s.hasDestination ? [.copyAgain(s.toGo)] : []     // with nowhere to go, Copy Again would do nothing
+            if s.hasDestination, c.phase == .ready, c.states[first.file.relPath]?.isBadCopyOnDrive == true {
+                line.detail.append("Choose another folder, or remove that file if it's a bad copy, and copy again.")
+            }
         } else if s.hasDestination, s.toGo > 0, s.checkFailures.isEmpty {
             line.actions = [.copyAgain(s.toGo)]     // a copy that ended short continues where it was going
         }
@@ -419,8 +426,11 @@ struct CardSheet: Equatable {
             let more = s.checkFailures.count - 1
             line.mark = .failed
             line.disagrees = true
-            line.detail = ["\(first.file.name)\(more > 0 ? " and \(more) more" : "") doesn't match."]
-            if s.hasDestination { line.detail.append("Choose another folder, or remove the bad copy and copy again.") }
+            let names = "\(first.file.name)\(more > 0 ? " and \(more) more" : "")"
+            line.detail = [first.why.hasPrefix("checking") ? "\(names) couldn't be read back, from the card or the drive." : "\(names) doesn't match."]
+            if s.hasDestination, c.phase == .ready, s.checkFailures.contains(where: { $0.why == FileState.badCopy }) {
+                line.detail.append("Choose another folder, or remove the bad copy and copy again.")
+            }
             line.actions = s.copyFailures.isEmpty && c.pendingDestination != nil ? [.copyAgain(s.toGo)] : []
         } else if !onDrive, s.cardChanged {
             line.mark = .failed

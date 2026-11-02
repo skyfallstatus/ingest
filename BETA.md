@@ -36,7 +36,7 @@ If the menu bar says **Have a look**, the warning is on the read-back line and i
 
 Ingest updates itself. Once a day it checks GitHub, downloads a new version quietly, and shows one line in the widget, with a **Restart** button. It never restarts by itself, and it won't while a card is being copied, read or checked. If you don't press it, the update installs the next time the app quits or crashes, and the app doesn't reopen by itself. Until the app has a Developer ID, each update asks for the Allow prompt again: macOS treats every build as a new app, so say yes again when it asks to read removable volumes. Restarting ends a card's proof, like quitting does, so a card that's in is read again.
 
-Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
+Some cameras have never been tested on a real card. The [table in the README](README.md#cameras) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 
 ## What to send back
 

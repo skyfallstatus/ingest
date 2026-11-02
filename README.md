@@ -1,12 +1,14 @@
 # Ingest
 
-A small menu bar app for macOS. It copies a camera card to your working drive, reads both sides back in full, and tells you when the card is safe to format.
+A small Mac app that copies your camera card to your drive, checks every file, and tells you when it's safe to format.
 
 <p align="center">
   <img src="docs/media/demo.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. A card goes in and the word beside the icon goes from Reading to a falling count such as 96 left, then Checking, then Safe to format. A small widget hangs under the icon, counting 148 files and 61.2 GB onto a drive called Field SSD and reading them back, until its ticks turn green and its bottom line says Safe to format.">
 </p>
 
-It lives in the menu bar as a card icon and a word: `Reading`, `96 left`, `Checking`, `Safe to format`. Click it for a small widget that shows the same numbers line by line, with the verdict at the bottom. There's no main window and no Dock icon.
+Ingest lives in your menu bar. Plug in a card and a small widget opens by itself. Name the shoot, press Copy, and go do something else. When it's finished, the widget turns green and says **Safe to format**.
+
+If the card is already on your drive, Ingest notices and checks it, so you don't have to copy it again.
 
 <p align="center">
   <img src="docs/media/widget-copying.png" width="380" align="top" alt="The widget partway through card A082. 148 files and 61.2 GB are on the card, 52 files are on Field SSD and read back from both sides, with a grey progress bar. The bottom line says Don't format: 96 files are only on this card.">
@@ -16,64 +18,87 @@ It lives in the menu bar as a card icon and a word: `Reading`, `96 left`, `Check
   </picture>
 </p>
 
-**Status:** private beta. Please read [what not to rely on yet](#what-not-to-rely-on-yet).
+Ingest is in beta, so for now please keep a second copy before you format a card.
 
-## What "Safe to format" promises
+## Download
 
-The app says it only when all of this is true for the card in front of you, on the drive you're using, with both of them plugged in since they were read:
+Get **Ingest.dmg** from the [latest release](https://github.com/skyfallstatus/ingest/releases/latest). After that, the app updates itself.
 
-- The card was listed completely, with no errors, and every listed file opened.
-- Every file was copied to a temporary name, written out to the drive, then read back from the drive itself rather than from memory.
-- Every file was read from the card a second time, separately from the copy. Both reads and the copy agree, by XXH64 hash and by size, and match the size the card listed.
-- Only then did the file get its real name.
-- A file that was already on the drive wasn't taken on trust. It was read in full on both sides too.
-- At the very end every file on the drive is still the file that was proved, and the card still lists exactly what was proved.
-- Nothing on the card raised a problem that stops the verdict.
+You'll need macOS 14 or later. So far it has only been tested on macOS 27 with Apple silicon: macOS 14, 15 and 26 are untested, and it hasn't run on an Intel Mac yet. If you're on one of those, please try it and tell us how it goes.
 
-**A proof doesn't outlive the plug.** Take the card or the drive out, even for a moment, and the proof ends. Put the card back in and it's recognised at once, then read in full on both sides before it can say Safe again: about 92 seconds on the 86 GB test card, from a card that reads at 939 MB/s. A file on the drive that changes loses its proof too, and is read again. As long as nothing changes and nothing comes out, opening the widget doesn't read anything in full.
+## Installing
 
-If a file doesn't match, the app tries once more and then says so. A file that fails never gets its real name on the drive. An ASC MHL manifest is written beside each card it copies, so other tools can check the copy without this app. A card that was already on the drive is checked and not copied, so it gets none. A card that keeps its own ASC MHL history is left as it was, and stills sent to their own folder aren't in the manifest.
+Ingest isn't signed by Apple yet, so macOS asks you to confirm the first time. It takes a minute, and you only do it once per version.
 
-## What it doesn't promise
+1. Open `Ingest.dmg` and drag Ingest to Applications.
+2. Open Ingest. macOS says it can't be opened. Click **Done**.
+3. Go to **System Settings › Privacy & Security** and scroll down to **Security**.
+4. Next to the message about Ingest, click **Open Anyway**, enter your password, then click **Open**.
 
-**Clips aren't played. It proves bytes.** A clip that was already broken when the camera wrote it will copy perfectly and match perfectly. For many formats the app also runs a structural check, such as whether an MP4 has an index or a RED clip has all its parts, and the verdict's sentence says which one ran. If there's no check for your format, it says "Clips were not checked or played."
+On macOS 14 you can skip all that: Control-click the app and choose **Open**.
 
-**One copy is one copy.** "Safe to format" means this drive holds what the card held at that moment. It says nothing about what happens to that drive tomorrow.
+When macOS asks if Ingest can read removable volumes, say yes. You'll see this question again after each update for now.
 
-**A drive's own cache can't be seen past.** The app asks the drive to finish writing and reads back from the device, not from macOS. No software can force a drive to tell the truth about its own internal cache. If a drive won't confirm a flush at all, the card goes to "Have a look", never to green.
+The first time you plug in a drive, Ingest reads how your folders are organised and follows the same pattern.
 
-The full list of rules is in [docs/SAFETY.md](docs/SAFETY.md).
+<p align="center">
+  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 built the same way, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, and a Use This button. It settles on No card, with Plug in a card and This opens by itself.">
+</p>
 
-## What not to rely on yet
+Can't see the icon? A full menu bar can hide it. Open Ingest from Applications again and the widget appears.
 
-This is a beta, and it hasn't seen every camera. Until told otherwise, **don't format a card on this beta's word alone without keeping another copy.** The table below shows how little evidence some formats have.
+## What "Safe to format" means
 
-## Cameras, by evidence
+Ingest only says it when all of this is true:
 
-Copying and proving bytes works the same for any card. What changes by camera is whether the app recognises the card, names the camera, and can check that clips are whole. This table is about those three things.
+- Every file on the card was copied to your drive.
+- Every file was read back from the drive and read again from the card, and the two match exactly.
+- The card and the drive stayed plugged in the whole time.
+
+If you unplug the card or the drive, Ingest checks everything again when it comes back. That takes about as long as reading the card once.
+
+If something doesn't match, Ingest tries once more and then tells you which file. A file that fails is never given its real name on your drive, so a bad copy can't pass for a good one.
+
+The full rules are in [docs/SAFETY.md](docs/SAFETY.md).
+
+## Good to know
+
+- **It checks the data. It doesn't watch your clips.** A clip that was already broken in camera will copy and match perfectly. For many formats Ingest also checks that clips are complete, but it's still worth opening a few yourself.
+- **One copy is one copy.** Safe means your drive holds what the card held. Drives can still fail later, so keep a backup.
+- **"Have a look"** means Ingest couldn't be completely sure, and the widget says why. Treat the card as not safe yet.
+- **Your cards are never written to.** On your drive, Ingest adds a hidden `.ingest` folder for your setup and its notes, and an `ascmhl` folder beside each card it copies, so other tools can check the copy too.
+
+## Cameras
+
+Any card can be copied and checked, whatever the camera. What varies is whether Ingest recognises the card, names the camera and can check that clips are complete. Some of that has been tested on real cards, and some so far only from the manufacturers' documents.
+
+If you shoot on something marked "Documents only", you'd be a big help: tell us how it goes.
+
+<details>
+<summary>What's been tested on what</summary>
 
 - **Real card:** the app has run on a whole card, or a whole card folder, as the camera wrote it.
-- **Real files:** real clips from that camera were tested, but loose, not as a card as the camera wrote it.
-- **Documents only:** built from manuals and specifications. No real file has been through it. Expect surprises.
+- **Real files:** real clips from that camera were tested, but loose.
+- **Documents only:** built from manuals and specifications, with no real file yet.
 
-| Maker | Camera or format | Evidence | Notes |
+| Maker | Camera or format | Tested on | Notes |
 |---|---|---|---|
 | Sony | FX2 | Real card | Mounted, copied and proved end to end |
 | Sony | FX3, FX6 | Real card | Whole card folders from a drive, not mounted cards |
 | Sony | ZV-E1, ZV-E10, A7S III | Real files | |
 | Sony | F55 RAW on an AXS-R5 | Real files | One public clip |
-| Sony | A7 IV, A7C II, A7R V, A1, A1 II, A9 III, FX30 | Documents only | Same family as the FX3. Model names unconfirmed |
-| Sony | VENICE, BURANO, X-OCN | **Documents only** | No real file. The clip check stays unconfirmed |
-| Canon | EOS R6, R5 Mark II | Real files | Loose clips only, no card tree |
-| Canon | Cinema EOS and R5 C: CRM, XF-AVC | **Documents only** | No real card and no real file |
-| Blackmagic | URSA Cine, PYXIS, Cinema Camera 6K, Pocket 6K, URSA Mini Pro | Real files | Public clips, some re-saved after shooting |
+| Sony | A7 IV, A7C II, A7R V, A1, A1 II, A9 III, FX30 | Documents only | Same family as the FX3 |
+| Sony | VENICE, BURANO, X-OCN | Documents only | |
+| Canon | EOS R6, R5 Mark II | Real files | Loose clips |
+| Canon | Cinema EOS and R5 C: CRM, XF-AVC | Documents only | |
+| Blackmagic | URSA Cine, PYXIS, Cinema Camera 6K, Pocket 6K, URSA Mini Pro | Real files | Public clips |
 | Blackmagic | Pocket 4K CinemaDNG | Real files | Public clips |
-| Blackmagic | Striped BRAW, `.braw` with `.braw2` | **Documents only** | No real pair. Always a hold until both halves are together, each proved by this app |
+| Blackmagic | Striped BRAW, `.braw` with `.braw2` | Documents only | Waits until both halves are together |
 | RED | DSMC, 2015 firmware | Real files | One public clip |
-| RED | KOMODO, KOMODO-X, V-RAPTOR | **Documents only** | No real file |
-| ARRI | ALEXA 35, Mini LF, ALEXA LF, ALEXA 65 | Real files | Public samples, reels rebuilt from real file names |
+| RED | KOMODO, KOMODO-X, V-RAPTOR | Documents only | |
+| ARRI | ALEXA 35, Mini LF, ALEXA LF, ALEXA 65 | Real files | Public samples |
 | ARRI | Compact Drive through Codex | Documents only | HDE volumes never go green |
-| GoPro | HERO5 to HERO8, MAX | Real files | Public clips with no chapters, so the chapter check is documents only |
+| GoPro | HERO5 to HERO8, MAX | Real files | Public clips |
 | DJI | Osmo Pocket 3 | Real files | |
 | Insta360 | X3 | Real files | |
 | Apple | iPhone | Real files | |
@@ -83,89 +108,44 @@ Copying and proving bytes works the same for any card. What changes by camera is
 | Fujifilm | Movies | Documents only | Stills tested from public files |
 | Zoom, Tascam | Recorders | Documents only | |
 
-## Requirements
+</details>
 
-macOS 14 or later, on Apple silicon or Intel. Only macOS 27 on Apple silicon has been tested so far: macOS 14, 15 and 26 are untested, and it has never run on an Intel Mac. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
+Your working drive can be exFAT, APFS or HFS+. FAT32 works too, up to 4 GB a file.
 
-## Download
+## Updates and privacy
 
-Get **Ingest.dmg** from the [latest release](https://github.com/skyfallstatus/ingest/releases/latest), or [download it directly](https://github.com/skyfallstatus/ingest/releases/latest/download/Ingest.dmg). After that the app updates itself.
+Once a day Ingest asks GitHub if there's a new version. That request is the only thing it sends: there's no account and no tracking. New versions download quietly, and the widget shows a **Restart** button. If you don't press it, the update installs next time the app quits. It never interrupts a copy. You can turn updates off in Settings.
 
-## Installing a beta
+Report a Bug and Suggest a Feature copy your report and open a blank GitHub page. Nothing is sent unless you paste it and press submit. Reports never include file names, paths, client names, serials or drive names.
 
-Beta builds aren't notarised yet, because the project has no Apple Developer ID. macOS will refuse the first launch, and you only have to get past that once per build.
+## Contributing
 
-The same steps are in `Read Me First` on the disk image, and in [BETA.md](BETA.md).
+Bug reports, camera samples and ideas are all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-1. Open `Ingest.dmg` and drag Ingest to Applications.
-2. Open Ingest from Applications. macOS says it can't be opened. Click **Done**.
-3. Open **System Settings › Privacy & Security** and scroll down to **Security**.
-4. Beside the message about Ingest, click **Open Anyway**, then enter your login password. The button stays there for about an hour after you tried to open the app.
-5. Click **Open**.
+<details>
+<summary>Building from source</summary>
 
-On macOS 14 you can skip all that: Control-click the app and choose **Open**.
-
-Ingest then shows in the menu bar. The first time it reads a card or drive, macOS asks whether it may read removable volumes. Say yes. Each new beta build asks again.
-
-<p align="center">
-  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 built the same way, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, and a Use This button. It settles on No card, with Plug in a card and This opens by itself.">
-</p>
-
-If the menu bar is full, macOS can hide the card icon. Open Ingest from Applications again and the widget appears.
-
-**Open at login** is in Settings. It works with beta builds and doesn't need the app to be in Applications, but macOS remembers where the app was when you turned it on, so move it to Applications first. Whether it stays on across a real log out, or a new beta build, isn't tested yet. If it looks off, turn it on again.
-
-## Network
-
-Once a day the app asks GitHub for the update feed, and it sends nothing but that request: no account, no profile of your Mac, no tracking. **Update by itself** in Settings turns that off, and it's on by default. If there's a new version it downloads quietly, from GitHub, and the widget says so. Press Restart to install it now, which waits for any card being copied, read or checked. If you don't, it installs the next time the app quits or crashes, and the app doesn't reopen by itself. Either way it waits for the app to be gone, so it never stops a job. Updates and the feed are both checked against a signature before anything installs.
-
-Report a Bug and Suggest a Feature put your report on the clipboard and open a blank GitHub page in your browser. Nothing you typed goes to GitHub unless you paste it there and send it. The report adds the app version, macOS version, Mac family and the camera maker if a card is in. It never adds paths, file names, client names, serials or drive names.
-
-## What it leaves on your drive
-
-- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: a drive that refused to confirm a copy stays on "Have a look". A copy cut off by a pulled cable or a crash doesn't: the next check reads it in full, and Copy Again or Add to carries on with whatever's left.
-- `ascmhl/`, beside each card it copies: the checksum manifest.
-
-Your cards are never written to.
-
-## Building and testing
-
-You need Swift 6.2 or later. Command Line Tools are enough, and Xcode isn't needed. There's one third-party dependency, [Sparkle](https://sparkle-project.org), which installs updates. SwiftPM fetches it, and its licence is in [NOTICE](NOTICE).
+You need Swift 6.2 or later. Command Line Tools are enough, so you don't need Xcode. The one dependency is [Sparkle](https://sparkle-project.org), which installs updates, and SwiftPM fetches it.
 
 ```sh
-swift build                       # everything
-scripts/test.sh                   # the test suite, no hardware needed. Mounts small throwaway images under /tmp, wants 150 GB free
-scripts/build-app.sh              # universal, ad-hoc signed dist/Ingest.app
-scripts/build-dmg.sh              # dist/Ingest.dmg from that app
+swift build              # everything
+scripts/test.sh          # the tests. No hardware needed, wants 150 GB free
+scripts/build-app.sh     # dist/Ingest.app
+scripts/build-dmg.sh     # dist/Ingest.dmg
 ```
 
-Two more ways to see it work:
-
-```sh
-# The real app flow against throwaway disk images, including pulled cards and drives.
-# Needs a folder holding a Sony card. Mounts images, so don't run it during other work.
-SAMPLE_CARD=/path/to/card scripts/selftest.sh
-
-# Every state of the widget as PNGs, light and dark, with staged data. Touches no volume.
-swift build --product IngestApp && .build/debug/IngestApp --render /tmp/ingest-shots
-```
-
-Tests for a few public sample files skip cleanly if the files aren't there. Point `INGEST_SAMPLES` at a folder holding them, by default `/tmp/ingest-samples`.
-
-`ingestctl` is a small command line tool over the same engine. `ingestctl match <card> <drive> --confirm` reads a card against a drive without writing to either, and exits 0 only on Safe. It's a look, and weaker than the app: it can't ask the drive to flush, so it can pass what the app would hold. See the stated limits in `docs/SAFETY.md`.
+`ingestctl` is a small command line tool over the same engine. `ingestctl match <card> <drive> --confirm` compares a card with a drive without writing to either. It's a quick look, and weaker than the app, because it can't ask the drive to finish writing.
 
 ```
-Sources/IngestCore   the engine: listing, copying, proving, the verdict, camera formats, drive layouts
+Sources/IngestCore   copying, checking, the verdict, camera formats, drive layouts
 Sources/CIngest      the C layer: uncached reads and writes, XXH64
 Sources/IngestApp    the menu bar app
 Sources/ingestctl    the command line tool
-docs/research        how the rules were arrived at, with evidence
+docs/research        how the rules were arrived at
 ```
 
-Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md).
+</details>
 
 ## License
 
-MIT. See [LICENSE](LICENSE). What this project includes from others is credited in [NOTICE](NOTICE).
-
-Third-party credits are in [NOTICE](NOTICE).
+MIT. See [LICENSE](LICENSE). Credits are in [NOTICE](NOTICE).

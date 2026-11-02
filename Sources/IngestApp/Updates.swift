@@ -107,9 +107,8 @@ import Sparkle
         state = .installing(version)
     }
 
-    /// Sparkle's session ended. One that's ready is still waiting for its press.
+    /// Sparkle's session ended. One that's ready is still waiting for its press, so it stays.
     func dismissed() {
-        if case .ready = state { return }
         if case .downloading = state { state = .idle }
         if case .installing = state { state = .idle }
     }

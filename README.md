@@ -103,7 +103,7 @@ Report a Bug and Suggest a Feature put your report on the clipboard and open a b
 
 ## What it leaves on your drive
 
-- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: files from a job that was cut off, by a pulled cable or a crash, stay on "Have a look" on that drive even after a full read, unless that copy is deleted and made again.
+- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: a drive that refused to confirm a copy stays on "Have a look". A copy cut off by a pulled cable or a crash doesn't: the next check reads it in full and carries on.
 - `ascmhl/`, beside each card's footage: the checksum manifest.
 
 Your cards are never written to.

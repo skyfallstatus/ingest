@@ -75,3 +75,16 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(Int(image.size.height) >= window - 28, "and the background has to reach the bottom")
 }
 
+// The owner's decision on N01: a cut-off job isn't on hold for good. The notes have to tell that story, and not the old one.
+@Test func theNotesTellTheStoryOfACutOffCopy() throws {
+    for rel in ["BETA.md", "README.md", "docs/SAFETY.md", "Resources/dmg/Read Me First.txt"] {
+        let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
+        #expect(!text.contains("even after a full read"), "\(rel)")
+        #expect(!text.contains("stay on hold for good"), "\(rel)")
+    }
+    let beta = try String(contentsOf: repo.appendingPathComponent("BETA.md"), encoding: .utf8)
+    #expect(beta.contains("Plug it back in"))
+    let rules = try String(contentsOf: repo.appendingPathComponent("docs/SAFETY.md"), encoding: .utf8)
+    #expect(rules.contains("refused") && rules.contains("unfinished") && rules.contains("A refusal that couldn't be recorded"))
+}
+

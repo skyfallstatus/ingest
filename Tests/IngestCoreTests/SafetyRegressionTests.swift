@@ -966,7 +966,9 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     let read = CardReader.read(root: card, kind: kind)
     let seen = Calls()
     let saved = Flag()
+    let writes = Calls()
     let hooks = FaultHooks(afterCopy: { _, _, _ in
+        writes.add(seen.countOf(2))
         let folder = drive + "/.ingest/ledger/"
         let text = (try? fm.contentsOfDirectory(atPath: folder))?.compactMap { try? String(contentsOfFile: folder + $0, encoding: .utf8) }.joined() ?? ""
         if text.contains("\"reserve\":\"S\\/a.bin\"") { saved.on = true }
@@ -975,7 +977,7 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }
     #expect(saved.on, "the name was on the record before the file had it")
     #expect(!seen.has(1), "and a name that was taken already isn't claimed")
-    #expect(seen.countOf(2) >= 2, "a write and its flush, before the first file")
+    #expect(writes.has(2), "one name and its flush, before the first file was done")
 }
 
 @Test func anEmptyFileSomeoneElseMadeKeepsItsNameAndSaysSo() throws {
@@ -1269,9 +1271,13 @@ private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throw
 
 @Test func aJobThatMeetsAnUnfinishedFileOnARefusingDriveHolds() throws {
     let (_, drive, read) = try cutOffCopy(flush: 0)
-    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    let calls = Counter()     // refused before the read, and confirmed at the seal, so only the first can hold it
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                   hooks: FaultHooks(syncVolume: { _ in calls.next() == 1 ? 1 : 0 })) { _ in }
+    #expect(calls.value == 2)
     #expect(out.weakVerification)
     #expect(try !ledgerText(drive).contains("\"closes\""))
+    #expect(Ledger(driveRoot: drive).isWeak(drivePath: "S/C0001.MP4"), "a no is on the record, here as in a check")
 }
 
 @Test func aFinishedFileStaysFinishedIfItsOwnJobIsCutOffLater() throws {

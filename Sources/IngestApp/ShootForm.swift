@@ -216,6 +216,7 @@ struct ShootForm: View {
     @Environment(AppModel.self) private var model
     let composer: ShootComposer
     let existingShoot: String?
+    var newFolderNote: String? = nil
 
     private enum Focus { case client, shoot }
     @State private var focus: Focus?
@@ -324,7 +325,10 @@ struct ShootForm: View {
         }
     }
 
-    private var links: some View {
+    @ViewBuilder private var links: some View {
+        if let newFolderNote {
+            Text(newFolderNote).font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true)
+        }
         HStack(spacing: 14) {
             // A reused card may hold a new shoot, so the fields above stay on offer beside this.
             if let existingShoot {

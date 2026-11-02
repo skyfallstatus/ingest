@@ -459,7 +459,7 @@ struct SheetView: View {
     }
 
     @ViewBuilder private func work(_ sheet: CardSheet, composer: ShootComposer?) -> some View {
-        if let composer { ShootForm(composer: composer, existingShoot: sheet.existingShoot).transition(.opacity) }
+        if let composer { ShootForm(composer: composer, existingShoot: sheet.existingShoot, newFolderNote: sheet.newFolderNote).transition(.opacity) }
         if let meter = sheet.meter {
             VStack(spacing: 5) {
                 ProgressView(value: meter).progressViewStyle(MeterStyle()).accessibilityLabel("Progress")

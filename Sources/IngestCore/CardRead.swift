@@ -11,7 +11,9 @@ extension FileState {
     /// Why a file failed when a copy on the drive is what's wrong. That copy is still there.
     public static let badCopy = "the copy on the drive doesn't match the card"
     public static let nameTaken = "a different file already has that name on the drive"
-    public var isBadCopyOnDrive: Bool { if case .failed(let why) = self { why == Self.badCopy || why == Self.nameTaken } else { false } }
+    /// A copy with this file's size and ends and a different middle. A file that only has its name, such as the older index of a
+    /// card filmed further, isn't one.
+    public var isBadCopyOnDrive: Bool { if case .failed(Self.badCopy) = self { true } else { false } }
 }
 
 /// A file proved by reading both sides in full, and what both sides looked like then. Held in memory only, so quitting

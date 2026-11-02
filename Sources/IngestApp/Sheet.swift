@@ -79,6 +79,7 @@ struct CardSheet: Equatable {
     var canReveal = false
     var showsNaming = false
     var existingShoot: String? = nil
+    var newFolderNote: String? = nil
     var meter: Double? = nil
     var rate: String? = nil
     var timeLeft: String? = nil
@@ -131,7 +132,10 @@ struct CardSheet: Equatable {
         sheet.path = path(s)
         sheet.canReveal = c.phase == .finished && (c.destinationPath != nil || c.existingHome != nil)
         sheet.showsNaming = s.canName
-        sheet.existingShoot = s.canName ? c.existingHome : nil
+        // Add to would need a name that's taken, by a bad copy or by the index a camera has since rewritten.
+        let canJoin = c.canJoinHome && !c.states.values.contains { $0.isBadCopyOnDrive }
+        sheet.existingShoot = s.canName && canJoin ? c.existingHome : nil
+        if s.canName, !canJoin, c.existingHome != nil { sheet.newFolderNote = "This card has changed since it was copied, so it gets a new folder beside the old one." }
         if c.phase == .copying, !finishing(c) {
             // Every file is read from the card twice, so that's the whole of the work.
             let total = max(c.progress?.bytesTotal ?? c.totalBytes, 1)
@@ -174,6 +178,7 @@ struct CardSheet: Equatable {
         let driveHolds: [CardIssue]
         let folderHold: CardIssue?      // empty folders a copy left out, which belong to the copy and not to any clip
         let notes: [CardIssue]
+        let split: CardIssue?           // proved across folders, which is about the copy and not about any clip
         let cardChanged: Bool
         let copyError: String?, nameError: String?
         let everythingProved: Bool
@@ -214,7 +219,8 @@ struct CardSheet: Equatable {
             driveHolds = holds.filter { $0.code == "drive.weak-verify" }
             folderHold = holds.first { $0.code == Pipeline.emptyFoldersCode }
             clipHolds = holds.filter { $0.code != "drive.weak-verify" && $0.code != Pipeline.emptyFoldersCode }
-            notes = c.issues.filter { $0.severity == .note }
+            notes = c.issues.filter { $0.severity == .note && $0.code != Pipeline.splitCode }
+            split = c.issues.first { $0.code == Pipeline.splitCode }
             cardChanged = c.failureReasons.contains { $0.hasPrefix("The card changed") }
 
             let onCopyLine = c.pendingDestination != nil || c.volumeGone
@@ -231,7 +237,7 @@ struct CardSheet: Equatable {
         var onlyFoldersMissing: Bool { folderHold != nil && driveHolds.isEmpty && clipHolds.isEmpty && !failed }
 
         /// What a job hasn't done yet. Files it took on from another folder aren't only on the card.
-        var stillToGo: String { card.keptElsewhere ? "\(plural(toGo)) not in the new folder yet." : onlyHere(toGo) }
+        var stillToGo: String { card.keptElsewhere ? "\(plural(toGo)) still to copy." : onlyHere(toGo) }
 
         var failed: Bool {
             guard !working else { return false }
@@ -293,7 +299,7 @@ struct CardSheet: Equatable {
             // What can be read can still be rescued, so the form that's open keeps its button.
             // With nowhere it was going, or no drive to go on, what failed may well be a copy that's there.
             let there = !s.hasDestination || s.model.workingDrive == nil
-            if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : onlyHere(s.toGo), .failed, s.canName ? .copy(s.total) : nil) }
+            if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : s.stillToGo, .failed, s.canName ? .copy(s.total) : nil) }
             return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
         }
         if s.onlyFoldersMissing, let n = s.folderHold?.paths.count {
@@ -303,7 +309,7 @@ struct CardSheet: Equatable {
         if s.model.workingDrive == nil {
             return no("\(plural(s.total)) on this card. \(s.model.drives.isEmpty ? "Plug in your working drive." : "Choose a working drive.")")
         }
-        return no(onlyHere(s.toGo), .notDone, s.canName ? .copy(s.total) : nil)     // the form starts a new folder, so that's the whole card
+        return no(s.stillToGo, .notDone, s.canName ? .copy(s.total) : nil)     // the form starts a new folder, so that's the whole card
     }
 
     /// What ran, in the verdict's own sentence. Nothing here claims a clip was played.
@@ -385,6 +391,7 @@ struct CardSheet: Equatable {
             line.mark = .done
             if s.shortDrive != s.driveName { line.detail = [s.driveName] }  // whatever the line had room for, the name is said
             if let note = c.badCopyNote { line.detail.append(note) }
+            if let split = s.split { line.detail.append(split.message) }
         }
         if drive.setup == nil, !s.hasDestination, s.toGo > 0 {
             line.detail = ["\(drive.name) isn't set up yet."]
@@ -402,7 +409,7 @@ struct CardSheet: Equatable {
             line.disagrees = true
             line.detail = ["\(first.file.name)\(more > 0 ? " and \(more) more" : ""): \(first.why)"]
             line.actions = s.hasDestination ? [.copyAgain(s.toGo)] : []     // with nowhere to go, Copy Again would do nothing
-            if s.hasDestination, c.phase == .ready, c.states[first.file.relPath]?.isBadCopyOnDrive == true {
+            if s.hasDestination, c.phase == .ready, first.why == FileState.nameTaken {
                 line.detail.append("Choose another folder, or remove that file if it's a bad copy, and copy again.")
             }
         } else if s.hasDestination, s.toGo > 0, s.checkFailures.isEmpty {
@@ -519,6 +526,7 @@ struct CardSheet: Equatable {
 
     @MainActor private static func path(_ s: Facts) -> String? {
         let c = s.card
+        if let split = s.split { return "In \(split.paths.count) folders" }
         if let label = c.shootLabel { return label }
         guard s.hasDestination || (s.everythingProved && !s.working), let home = c.destinationPath ?? c.existingHome else { return nil }
         return homeLabel(home, setup: s.model.workingDrive?.setup)

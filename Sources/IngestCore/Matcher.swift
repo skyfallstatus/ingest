@@ -3,7 +3,7 @@ import Foundation
 public enum CardMatcher {
     /// Largest number of same-sized files on the drive worth opening for one card file.
     private static let maxCandidates = 16
-    private static let oneMiB: UInt64 = 1 << 20
+    public static let oneMiB: UInt64 = 1 << 20
 
     /// Nothing comes out of here `.verified` unless it's in `proved` and both files are still those files, on the same
     /// mounts: bytes read in full on both sides, while this card and this drive have stayed in.
@@ -49,6 +49,18 @@ public enum CardMatcher {
         return out
     }
 
+    /// Whether this card can join `home` without overwriting anything: every file already at its place there has the card's size
+    /// and ends. A camera rewrites its index as it films, so a card filmed further can't, and takes a new folder of its own.
+    public static func canJoin(home: String, read: CardRead, driveRoot: String) -> Bool {
+        for f in read.listing.files {
+            let path = driveRoot + "/" + home + "/" + f.relPath
+            var st = stat()
+            guard lstat(path, &st) == 0, st.st_size > 0 else { continue }
+            guard UInt64(st.st_size) == f.size, let quick = read.quick[f.relPath], fingerprint(path: path).map(hexHash) == quick else { return false }
+        }
+        return true
+    }
+
     private static func sharedTail(_ a: String, _ b: String) -> Int {
         let x = a.split(separator: "/").reversed(), y = b.split(separator: "/").reversed()
         return zip(x, y).prefix { $0 == $1 }.count
@@ -58,10 +70,15 @@ public enum CardMatcher {
     /// Returns the drive-relative folder that plays the role of the card root.
     /// Only substantial footage counts: every card of a camera shares marker files, some of them over a megabyte, which say
     /// nothing about which card this is.
-    public static func existingHome(states: [String: FileState], files: [CardFile], kinds: Set<FileKind> = [.video, .audio, .still]) -> String? {
+    /// Clips come first: stills have a folder of their own, and more of them doesn't make that the card's home.
+    public static func existingHome(states: [String: FileState], files: [CardFile]) -> String? {
+        existingHome(states: states, files: files, kinds: [.video, .audio]) ?? existingHome(states: states, files: files, kinds: [.still])
+    }
+
+    public static func existingHome(states: [String: FileState], files: [CardFile], kinds: Set<FileKind>, smallestFile: UInt64 = oneMiB) -> String? {
         var counts: [String: Int] = [:]
         let sizes = Dictionary(files.filter { kinds.contains($0.kind) }.map { ($0.relPath, $0.size) }, uniquingKeysWith: { a, _ in a })
-        for (rel, s) in states where (sizes[rel] ?? 0) >= oneMiB {
+        for (rel, s) in states where sizes[rel].map({ $0 >= smallestFile }) == true {
             let drive: String
             switch s {
             case .likely(let p), .verified(let p, _, _): drive = p

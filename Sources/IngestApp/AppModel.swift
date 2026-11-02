@@ -91,10 +91,12 @@ import UserNotifications
     var checkBytes: UInt64 = 0          // what the running check has to read
     var checkStarted: Date?
     var existingHome: String?
+    var canJoinHome = false             // nothing at its place in that folder would have to be overwritten
     var shootLabel: String?             // "Lantern Bakery Co. · 22.10.26 Spring menu", once it's been named
     var keptElsewhere = false           // a job took on files proved in another folder, so they're not only on the card
     var badCopyNote: String?            // what a rescue left where it was
     var folderError: String?            // why an empty folder couldn't be added
+    var destinationDrive: String?       // the drive `pendingDestination` is on
     let draft = ShootDraft()
     let control = IngestControl()
 
@@ -132,7 +134,7 @@ import UserNotifications
 
     /// Everything a drive said about this card, gone in one step, before anything is said about another drive.
     func forgetDrive() {
-        proved = [:]; states = [:]; weak = false; verdict = nil; issues = []; provedOn = nil; existingHome = nil
+        proved = [:]; states = [:]; weak = false; verdict = nil; issues = []; provedOn = nil; existingHome = nil; canJoinHome = false
         keptElsewhere = false; badCopyNote = nil; folderError = nil
         if !isBusy, !volumeGone { phase = .reading(done: 0, total: 0) }
     }
@@ -449,6 +451,18 @@ import UserNotifications
             CardMatcher.match(read: read, ledger: ledger, index: index, driveRoot: root, proved: proved)
         }.value
         guard current() else { return }
+        // A job told where this card goes isn't finished by a copy somewhere else, however good. What it owes stays owed.
+        if let d = c.pendingDestination, c.destinationDrive == drive.volume.key {
+            let places = Dictionary(Pipeline.makeJob(read: read, states: [:], cardName: c.name, driveRoot: root, camera: nil, destination: d, probe: c.probe, index: index)
+                .items.map { ($0.file.relPath, $0.drivePath) }, uniquingKeysWith: { a, _ in a })
+            for (rel, s) in states {
+                let found: String? = switch s { case .likely(let p), .verified(let p, _, _): p; default: nil }
+                guard let found, let place = places[rel], found != place else { continue }
+                if case .failed? = c.states[rel] { states[rel] = c.states[rel] } else { states[rel] = .missing }
+                c.proved[rel] = nil
+                c.keptElsewhere = true
+            }
+        }
         // A file that failed still failed, and for the same reason, until something new is known about it.
         for (rel, state) in c.states { if case .failed = state, states[rel] == .missing { states[rel] = state } }
         // Copies this app didn't make still have to prove themselves, by reading both sides.
@@ -485,7 +499,10 @@ import UserNotifications
                 return
             }
         }
-        c.existingHome = CardMatcher.existingHome(states: states, files: read.listing.files)
+        let home = CardMatcher.existingHome(states: states, files: read.listing.files)
+        c.existingHome = home
+        c.canJoinHome = await Task.detached(priority: .userInitiated) { home.map { CardMatcher.canJoin(home: $0, read: read, driveRoot: root) } ?? false }.value
+        guard current() else { return }
         await finish(c)
         // A check can run a long while with nobody watching, so the end of one is news, as the end of a copy is.
         if !likely.isEmpty, c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
@@ -583,15 +600,13 @@ import UserNotifications
             c.forgetDrive()
             c.provedOn = drive
         }
-        // A rescue leaves a bad copy where it is, and whoever opens that folder should be told.
-        if let old = c.pendingDestination?.footageRoot ?? c.existingHome, old != destination.footageRoot,
-           let bad = c.read?.listing.files.first(where: { c.states[$0.relPath]?.isBadCopyOnDrive == true }) {
-            c.badCopyNote = "A bad copy of \(bad.name) is still in \(CardSheet.homeLabel(old, setup: drive.setup))."
-        }
-        for (rel, state) in c.states { if case .failed = state { c.states[rel] = .missing } }     // this job says what becomes of them
         do {
             try IngestEngine.preflight(job: job(for: c, read: read, drive: drive, destination: destination, extraFolders: extraFolders), ledger: drive.ledger)
+            // A rescue leaves a bad copy where it is, and whoever opens that folder should be told. Going on with the same job isn't one.
+            if destination.footageRoot != c.pendingDestination?.footageRoot { c.badCopyNote = badCopySentence(c, leaving: destination) }
+            for (rel, state) in c.states { if case .failed = state { c.states[rel] = .missing } }     // this job says what becomes of them
             c.pendingDestination = destination
+            c.destinationDrive = drive.volume.key
             c.extraFolders = extraFolders
             c.destinationPath = destination.footageRoot
             c.error = nil
@@ -617,9 +632,16 @@ import UserNotifications
         if c.isSafe(on: drive) { announce(c, drive: drive) }
     }
 
+    private func badCopySentence(_ c: CardSession, leaving destination: Destination) -> String? {
+        guard let old = c.pendingDestination?.footageRoot ?? c.existingHome, old != destination.footageRoot else { return nil }
+        let bad = (c.read?.listing.files ?? []).filter { c.states[$0.relPath]?.isBadCopyOnDrive == true }
+        guard let first = bad.first else { return nil }
+        return bad.count == 1 ? "A bad copy of \(first.name) is still in \(old)." : "Bad copies of \(bad.count) files are still in \(old)."
+    }
+
     /// Adds what's left of a card to the folder that already holds the rest of it.
     func add(_ card: CardSession, to home: String) {
-        let stills = CardMatcher.existingHome(states: card.states, files: card.read?.listing.files ?? [], kinds: [.still])
+        let stills = CardMatcher.existingHome(states: card.states, files: card.read?.listing.files ?? [], kinds: [.still], smallestFile: 0)
         start(card, destination: Destination(footageRoot: home, stillsRoot: stills))
     }
 
@@ -815,11 +837,18 @@ import UserNotifications
         scheduleRefresh()   // the same card may be back already
     }
 
+    /// Where a card is. Usually one folder, and every one of them if it's proved across more.
+    func foldersToShow(_ c: CardSession) -> [String] {
+        guard let drive = workingDrive else { return [] }
+        let split = c.read.map { Pipeline.homes(read: $0, states: c.states) } ?? []
+        return (split.isEmpty ? [c.destinationPath ?? c.existingHome].compactMap { $0 } : split).map { drive.path + "/" + $0 }
+    }
+
     func revealDestination(of c: CardSession) {
         guard let drive = workingDrive else { return }
-        let rel = c.destinationPath ?? c.existingHome
-        guard let rel else { NSWorkspace.shared.open(URL(fileURLWithPath: drive.path)); return }
-        reveal(path: drive.path + "/" + rel)
+        let folders = foldersToShow(c)
+        guard !folders.isEmpty else { NSWorkspace.shared.open(URL(fileURLWithPath: drive.path)); return }
+        NSWorkspace.shared.activateFileViewerSelecting(folders.map { URL(fileURLWithPath: $0) })
     }
 
     /// The copy on the drive of a file named in an issue, else the card's folder.

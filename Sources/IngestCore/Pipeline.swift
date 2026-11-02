@@ -109,6 +109,7 @@ public enum Pipeline {
         // A device can report trouble only after the bytes have been read, so its log is read after them too.
         var now = issues.filter { !$0.code.hasPrefix("codex.") } + CardProber.deviceIssues(root: read.listing.root, files: read.listing.files)
         if let root, let missing = missingFolders(read: read, states: checked, root: root) { now.append(missing) }
+        if let split = splitNote(read: read, states: checked) { now.append(split) }
         let verdict = Verdict.evaluate(listing: read.listing, unreadable: read.unreadable, states: checked, issues: now,
                                        cardUnchanged: read.listing.sameContents(as: again.listing) && read.quick == again.quick)
         return (verdict, checked, now)
@@ -147,6 +148,27 @@ public enum Pipeline {
             home = here
         }
         return home
+    }
+
+    /// The folders a card's footage is proved across, if that's more than one. Stills can have a folder of their own, so they're
+    /// counted apart, and only footage counts: a marker every card shares can be proved anywhere.
+    public static func homes(read: CardRead, states: [String: FileState]) -> [String] {
+        var found: [Bool: Set<String>] = [:]
+        for f in read.listing.files where f.kind == .video || f.kind == .audio || f.kind == .still {
+            guard case .verified(let drive, _, _)? = states[f.relPath], drive.hasSuffix("/" + f.relPath) else { continue }
+            found[f.kind == .still, default: []].insert(String(drive.dropLast(f.relPath.count + 1)))
+        }
+        return found.values.filter { $0.count > 1 }.flatMap { $0 }.sorted()
+    }
+
+    public static let splitCode = "card.split"
+
+    /// Every byte can be proved with a card in two places, and that's no reason to hold it. But Safe is when someone tidies up.
+    private static func splitNote(read: CardRead, states: [String: FileState]) -> CardIssue? {
+        let homes = homes(read: read, states: states)
+        guard let last = homes.last else { return nil }
+        let names = homes.dropLast().joined(separator: ", ") + " and " + last
+        return CardIssue(severity: .note, code: splitCode, message: "This card is proved across \(homes.count) folders: \(names). Keep \(homes.count == 2 ? "both" : "them all").", paths: homes)
     }
 
     /// Writes the manifest for what this job verified under its destination.

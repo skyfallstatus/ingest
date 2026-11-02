@@ -1815,6 +1815,69 @@ private func provedStates(_ read: CardRead, in homes: (CardFile) -> String) -> [
     #expect(IngestEngine.addFolders(["x"], home: ".ingest", driveRoot: drive) == ["x"], "and the app's own folder isn't a home")
 }
 
+@Test func aCardsHomeIsWhereItsClipsAreEvenWithMorePhotos() {
+    let card = temp()
+    for n in 1 ... 6 { put(card + "/DCIM/P\(n).JPG", rnd(1_100_000)) }
+    for n in 1 ... 2 { put(card + "/CLIP/C\(n).MP4", rnd(1_100_000)) }
+    let read = CardReader.read(root: card) { CardProber.kind(ofRelativePath: $0) }
+    var states: [String: FileState] = [:]
+    for f in read.listing.files {
+        states[f.relPath] = .verified(drivePath: (f.kind == .still ? "Photo/A/" : "Foot/A/") + f.relPath, hash: "1", bytes: f.size)
+    }
+    #expect(CardMatcher.existingHome(states: states, files: read.listing.files) == "Foot/A")
+}
+
+@Test func aCardOfPhotosStillHasAHome() {
+    let card = temp()
+    put(card + "/DCIM/P1.JPG", rnd(1_100_000))
+    let read = CardReader.read(root: card) { CardProber.kind(ofRelativePath: $0) }
+    let states: [String: FileState] = ["DCIM/P1.JPG": .verified(drivePath: "Photo/A/DCIM/P1.JPG", hash: "1", bytes: 1_100_000)]
+    #expect(CardMatcher.existingHome(states: states, files: read.listing.files) == "Photo/A")
+}
+
+@Test func smallStillsStillHaveAHome() {
+    let card = temp()
+    put(card + "/DCIM/P1.JPG", rnd(500_000))
+    let read = CardReader.read(root: card) { CardProber.kind(ofRelativePath: $0) }
+    let states: [String: FileState] = ["DCIM/P1.JPG": .verified(drivePath: "Photo/A/DCIM/P1.JPG", hash: "1", bytes: 500_000)]
+    #expect(CardMatcher.existingHome(states: states, files: read.listing.files, kinds: [.still], smallestFile: 0) == "Photo/A")
+}
+
+/// A card and the folder it went to, then changed the way `change` says.
+private func joinable(_ change: (String, String) -> Void) -> Bool {
+    let card = temp(), drive = temp(), index = rnd(9000)
+    put(card + "/M4ROOT/MEDIAPRO.XML", index); put(drive + "/S/M4ROOT/MEDIAPRO.XML", index)
+    put(card + "/CLIP/A.MP4", rnd(2000)); put(drive + "/S/CLIP/A.MP4", fm.contents(atPath: card + "/CLIP/A.MP4")!)
+    change(card, drive)
+    return CardMatcher.canJoin(home: "S", read: CardReader.read(root: card, kind: kind), driveRoot: drive)
+}
+
+@Test func aCardWithNewClipsCanJoinItsFolder() {
+    #expect(joinable { card, _ in put(card + "/CLIP/B.MP4", rnd(2000)) })
+}
+
+@Test func aCardWhoseIndexChangedCantJoinItsFolder() {
+    #expect(!joinable { card, _ in put(card + "/M4ROOT/MEDIAPRO.XML", rnd(9500)) }, "another size")
+    #expect(!joinable { card, _ in put(card + "/M4ROOT/MEDIAPRO.XML", rnd(9000)) }, "the same size, and other bytes at the ends")
+}
+
+@Test func anEmptyFileInTheFolderDoesntStopACardJoiningOrNot() {
+    #expect(!joinable { card, _ in put(card + "/SONY/SONYCARD.IND", Data()); put(card + "/M4ROOT/MEDIAPRO.XML", rnd(100)) })
+    #expect(joinable { card, drive in put(card + "/SONY/SONYCARD.IND", Data()); put(drive + "/S/SONY/SONYCARD.IND", Data()) })
+}
+
+@Test func aFoldersProvedHomesCountFootageAloneWithStillsApart() {
+    let card = temp()
+    put(card + "/DCIM/P1.JPG", rnd(10)); put(card + "/CLIP/A.MP4", rnd(10)); put(card + "/CLIP/B.MP4", rnd(10)); put(card + "/AVF/SHARED.BNP", rnd(10))
+    let read = CardReader.read(root: card) { CardProber.kind(ofRelativePath: $0) }
+    func state(_ home: String, _ rel: String) -> FileState { .verified(drivePath: home + "/" + rel, hash: "1", bytes: 10) }
+    let whole: [String: FileState] = ["DCIM/P1.JPG": state("Photo/A", "DCIM/P1.JPG"), "CLIP/A.MP4": state("Foot/A", "CLIP/A.MP4"), "CLIP/B.MP4": state("Foot/A", "CLIP/B.MP4"), "AVF/SHARED.BNP": state("Foot/Z", "AVF/SHARED.BNP")]
+    #expect(Pipeline.homes(read: read, states: whole).isEmpty, "stills have their own folder, and a marker another card shares says nothing")
+    var split = whole
+    split["CLIP/B.MP4"] = state("Foot/B", "CLIP/B.MP4")
+    #expect(Pipeline.homes(read: read, states: split) == ["Foot/A", "Foot/B"])
+}
+
 // Nothing a person reads talks about flushes or caches.
 @Test func theWordsOnAHoldAreForAPerson() {
     let message = Pipeline.settle(issues: [], states: [:], weak: true, driveRoot: "/x")[0].message.lowercased()

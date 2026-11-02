@@ -390,6 +390,7 @@ private final class Dying: @unchecked Sendable {
         var card = try Data(contentsOf: URL(fileURLWithPath: w.card + "/one.bin"))
         card[500_000] ^= 0xFF
         put(w.a + "/Sorted/one.bin", card)      // the right name, size and ends, and a bad middle
+        put(w.a + "/Sorted/two.bin", try Data(contentsOf: URL(fileURLWithPath: w.card + "/two.bin")))
         w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
         await w.model.refresh()
         let live = w.drive(w.driveA)
@@ -400,7 +401,7 @@ private final class Dying: @unchecked Sendable {
         let sheet = CardSheet.make(c, model: w.model)
         #expect(sheet.bottom.sentence == "1 file didn't match.")
         #expect(sheet.showsNaming)
-        #expect(sheet.bottom.action == .copy(c.filesToGo))
+        #expect(sheet.bottom.action == .copy(c.totalFiles), "the form starts a new folder, so that's the whole card")
     }
 
     /// A bad copy sitting in the folder the card is going to: the right name, size and ends, and a bad middle.
@@ -418,7 +419,8 @@ private final class Dying: @unchecked Sendable {
         await w.until("the check") { !live.isScanning && !c.isMatching && c.phase == .ready && { if case .failed? = c.states["one.bin"] { true } else { false } }() }
         w.model.start(c, destination: Destination(footageRoot: "Sorted"))
         await w.until("the job") { !c.isBusy && c.phase != .queued && !c.isMatching && { if case .failed? = c.states["one.bin"] { true } else { false } }() }
-        await w.until("the rescan after it") { CardSheet.make(c, model: w.model).line(.readDrive)?.detail.isEmpty == false }
+        await w.until("the look after it") { !c.isMatching }
+        await w.model.matchCard(c)              // the rescan a job's end asks for, which can land at any time or be folded into another
         return (c, bad)
     }
 
@@ -598,7 +600,7 @@ private final class Dying: @unchecked Sendable {
         let (c, bad) = try await stuckOnABadCopy(w)
         let good = FileManager.default.contents(atPath: w.a + "/Sorted/two.bin")
         w.model.retry(c)                        // the same folder again isn't a rescue
-        await w.until("the retry") { !c.isBusy && CardSheet.make(c, model: w.model).line(.readDrive)?.detail.isEmpty == false }
+        await w.until("the retry") { !c.isBusy && !c.isMatching }
         #expect(c.badCopyNote == nil, "\(String(describing: c.badCopyNote))")
         c.shootLabel = "Old Client / Old Shoot"
         w.model.copy(c, into: "Elsewhere")
@@ -818,6 +820,21 @@ private final class Dying: @unchecked Sendable {
         #expect(o.error == nil, "\(String(describing: o.error))")
     }
 
+    @Test func `A saved drive turning up during a job doesn't take away what that job proved`() async throws {
+        let w = Bench()
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = w.model.cards[0]
+        await w.until("the card to settle") { c.phase == .ready && !c.isMatching }
+        w.model.stores.workingDriveKey = w.driveB.key       // the drive it would rather have, not plugged in yet
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.until("the copy") { !c.isBusy && c.phase == .finished }
+        #expect(w.model.workingDrive?.path == w.a, "the card is Safe here, and nothing has looked since")
+        #expect(c.isSafe(on: w.model.workingDrive))
+    }
+
     @Test func `Only a copy that's really bad is called bad`() async throws {
         let w = Bench()
         let c = await w.ready()
@@ -835,6 +852,15 @@ private final class Dying: @unchecked Sendable {
         c.states["one.bin"] = .failed("the copy on the drive doesn't match the card")
         c.phase = .stopped
         #expect(!detail().contains(hint), "there's no button for it on a stopped card")
+    }
+
+    @Test func `A failed file keeps the Copy button, for the whole card`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        w.drive(w.driveA).setup = ShootPlanner.presets()[0].setup
+        c.states["one.bin"] = .failed("couldn't put the file in place")
+        c.states["two.bin"] = .verified(drivePath: "S/two.bin", hash: "1", bytes: 1)
+        #expect(CardSheet.make(c, model: w.model).bottom.action == .copy(2))
     }
 
     @Test func `A file in the way says what to do`() async throws {

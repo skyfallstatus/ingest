@@ -1626,6 +1626,12 @@ private func twinsHalfCopied() throws -> (card: String, drive: String, read: Car
     return (card, drive, read, out)
 }
 
+@Test func aRecordedFileAnswersForOneTwinOnly() throws {
+    let (_, drive, read, _) = try twinsHalfCopied()
+    let states = CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: DriveIndex.scan(root: drive), driveRoot: drive)
+    #expect(states.values.filter { $0 == .missing }.count == 1, "\(states)")
+}
+
 @Test func aFileNoRecordKnowsAnswersForOneTwinOnly() throws {
     let (_, drive, read, _) = try twinsHalfCopied()
     try fm.removeItem(atPath: drive + "/.ingest")
@@ -1652,10 +1658,11 @@ private func twinsHalfCopied() throws -> (card: String, drive: String, read: Car
 }
 
 @Test func theNewestRecordOfACopyIsTheOneLookedAt() throws {
-    func entryOnADrive(oldName: String, newName: String) throws -> String? {
+    func entryOnADrive(oldName: String, newName: String, newestWrittenFirst: Bool = false) throws -> String? {
         let drive = temp()
         put(drive + "/Old/a.bin", rnd(1000)); put(drive + "/New/a.bin", rnd(1000))
-        for (job, year, path) in [(oldName, 1_000_000_000.0, "Old/a.bin"), (newName, 1_700_000_000.0, "New/a.bin")] {
+        let jobs = [(oldName, 1_000_000_000.0, "Old/a.bin"), (newName, 1_700_000_000.0, "New/a.bin")]
+        for (job, year, path) in newestWrittenFirst ? jobs.reversed() : jobs {
             let j = try Ledger(driveRoot: drive).open(LedgerHeader(job: job, started: Date(timeIntervalSince1970: year), cardName: "c", camera: nil, destination: "S", app: "t"))
             try j.record(LedgerEntry(cardPath: "a.bin", drivePath: path, size: 1000, quick: "q", hash: "h", weak: nil))
             j.close()
@@ -1665,6 +1672,7 @@ private func twinsHalfCopied() throws -> (card: String, drive: String, read: Car
     // The file names say nothing, so both orders.
     #expect(try entryOnADrive(oldName: "A", newName: "Z") == "New/a.bin")
     #expect(try entryOnADrive(oldName: "Z", newName: "A") == "New/a.bin")
+    #expect(try entryOnADrive(oldName: "A", newName: "Z", newestWrittenFirst: true) == "New/a.bin", "when it started is what counts")
 }
 
 // Headers keep whole seconds, and a small card can go twice in one.

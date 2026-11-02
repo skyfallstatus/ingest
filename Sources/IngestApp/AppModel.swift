@@ -645,7 +645,7 @@ import UserNotifications
 
     private func pumpQueue() {
         guard !queueRunning, let c = queue.first else {
-            if !queueRunning { chooseWorkingDrive() }       // nothing was allowed to change it while a job ran
+            if !queueRunning, workingDrive == nil { chooseWorkingDrive() }      // a drive that came back had to wait for the job
             return
         }
         queueRunning = true

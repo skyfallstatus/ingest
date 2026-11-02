@@ -312,6 +312,166 @@ private func aChildThatLeftTheGroup(pidFile: String) -> String {
     }
 }
 
+/// The real `scripts/release.sh`, whole, in a repo of its own, with the build, the Sparkle tools and `gh` stood in for. So no
+/// Keychain, no signing, no GitHub, and everything it would have done is in `log`.
+private final class Release {
+    let root = temp(), bin = temp()
+    var log: String { (try? String(contentsOfFile: root + "/.log", encoding: .utf8)) ?? "" }
+    var uploaded: Bool { log.contains("gh release create") }
+
+    private func stub(_ path: String, _ body: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try ("#!/bin/zsh\n" + body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        chmod(path, 0o755)
+    }
+
+    private func git(_ args: String) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-c", "git -c user.name=t -c user.email=t@t.invalid \(args)"]
+        p.currentDirectoryURL = URL(fileURLWithPath: root)
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+    }
+
+    init() throws {
+        try FileManager.default.createDirectory(atPath: root + "/scripts", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: root + "/Sources/IngestCore", withIntermediateDirectories: true)
+        try FileManager.default.copyItem(atPath: repo.appendingPathComponent("scripts/release.sh").path, toPath: root + "/scripts/release.sh")
+        try FileManager.default.copyItem(atPath: repo.appendingPathComponent("Sources/IngestCore/AppInfo.swift").path, toPath: root + "/Sources/IngestCore/AppInfo.swift")
+        try ".build\ndist\n.log\n".write(toFile: root + "/.gitignore", atomically: true, encoding: .utf8)
+        try stub(root + "/scripts/build-app.sh", #"""
+        mkdir -p dist/Ingest.app/Contents
+        print -r -- "build flags [$EXTRA_SWIFT_FLAGS]" >> .log
+        /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $STUB_BUILD" -c "Add :SUPublicEDKey string the-key" dist/Ingest.app/Contents/Info.plist >/dev/null
+        """#)
+        try stub(root + "/scripts/build-dmg.sh", #"""
+        touch dist/Ingest.dmg
+        [[ -n $STUB_MOVE ]] && git -c user.name=t -c user.email=t@t.invalid commit -q --allow-empty -m moved
+        true
+        """#)
+        let tools = root + "/.build/arm64/artifacts/sparkle/Sparkle/bin"
+        try stub(tools + "/generate_keys", #"[[ -n $STUB_KEY ]] || exit 1; print -r -- $STUB_KEY"#)
+        try stub(tools + "/sign_update", #"print -r -- "sign_update $*" >> .log; print -r -- 'sparkle:edSignature="s" length="1"'"#)
+        try stub(bin + "/gh", #"""
+        print -r -- "gh $*" >> .log
+        case "$1 $2" in
+          "api repos/"*) exit ${STUB_NO_COMMIT:-0} ;;
+          "release view") exit 1 ;;
+          "release list") print -r -- ${STUB_RELEASES:-1} ;;
+          "release download") print -r -- "<sparkle:version>$STUB_PUBLISHED</sparkle:version>" ;;
+        esac
+        exit 0
+        """#)
+        try git("init -q")
+        try git("add -A")
+        try git("commit -q -m first")
+    }
+
+    func run(_ args: [String] = [], env: [String: String] = [:], answer: String = "yes") throws -> (code: Int32, said: String) {
+        try? FileManager.default.removeItem(atPath: root + "/.log")
+        try? FileManager.default.removeItem(atPath: root + "/dist")
+        let p = Process(), out = Pipe(), input = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = [root + "/scripts/release.sh"] + args
+        p.environment = ProcessInfo.processInfo.environment.merging(
+            ["PATH": bin + ":/usr/bin:/bin", "STUB_BUILD": "20", "STUB_PUBLISHED": "19", "STUB_KEY": "the-key", "EXTRA_SWIFT_FLAGS": "-Xswiftc -DUPDATE_TEST"].merging(env) { _, new in new }) { _, new in new }
+        p.standardOutput = out
+        p.standardError = out
+        p.standardInput = input
+        try p.run()
+        input.fileHandleForWriting.write(Data((answer + "\n").utf8))
+        try input.fileHandleForWriting.close()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+    }
+
+    func commit() throws -> String {
+        try String(contentsOfFile: root + "/.git/refs/heads/" + branch, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var branch: String {
+        ((try? String(contentsOfFile: root + "/.git/HEAD", encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "/").last ?? "main"
+    }
+    func dirty() throws { try "x".write(toFile: root + "/stray", atomically: true, encoding: .utf8) }
+}
+
+@Test func aReleaseGoesOutWithTheExactCommitASignedFeedAndNoTestFlags() throws {
+    let r = try Release()
+    let run = try r.run()
+    #expect(run.code == 0, "\(run.said)")
+    #expect(r.uploaded, "\(r.log)")
+    #expect(r.log.contains("--target \(try r.commit())"), "not whatever GitHub's default branch has moved to: \(r.log)")
+    #expect(r.log.contains("build flags []"), "\(r.log)")
+    #expect(r.log.contains("sign_update dist/appcast.xml"), "the app refuses a feed that isn't signed")
+    #expect(r.log.contains("sign_update --verify dist/appcast.xml"))
+}
+
+@Test func theFirstReleaseHasNoFeedToBeat() throws {
+    let r = try Release()
+    let run = try r.run(env: ["STUB_RELEASES": "0"])
+    #expect(run.code == 0, "\(run.said)")
+    #expect(r.uploaded)
+}
+
+@Test func aDryRunTouchesNothingOnGitHub() throws {
+    let r = try Release()
+    let run = try r.run(["--dry-run"])
+    #expect(run.code == 0, "\(run.said)")
+    #expect(!r.log.contains("gh "), "\(r.log)")
+}
+
+@Test func aReleaseSignedWithTheWrongKeyIsRefused() throws {
+    let r = try Release()
+    for key in ["another-key", ""] {
+        let run = try r.run(env: ["STUB_KEY": key])
+        #expect(run.code == 1, "\(run.said)")
+        #expect(run.said.contains("Keychain"), "\(run.said)")
+        #expect(!r.log.contains("sign_update"), "and nothing was signed")
+        #expect(!r.uploaded)
+    }
+}
+
+@Test func aReleaseNoHigherThanTheFeedIsRefused() throws {
+    let r = try Release()
+    for published in ["20", "21"] {
+        let run = try r.run(env: ["STUB_PUBLISHED": published])
+        #expect(run.code == 1, "\(run.said)")
+        #expect(run.said.contains("Every Mac would ignore it"), "\(run.said)")
+        #expect(!r.uploaded)
+    }
+    #expect(try r.run(env: ["STUB_PUBLISHED": "9", "STUB_BUILD": "20"]).code == 0, "10 and 9 are numbers, not words")
+    let unreadable = try r.run(env: ["STUB_PUBLISHED": "nothing"])
+    #expect(unreadable.code == 1, "a feed that can't be read isn't a first release: \(unreadable.said)")
+}
+
+@Test func aReleaseFromADirtyTreeIsRefused() throws {
+    let r = try Release()
+    try r.dirty()
+    let run = try r.run()
+    #expect(run.code == 1, "\(run.said)")
+    #expect(run.said.contains("A release is built from a commit"))
+    #expect(!r.log.contains("build flags"), "it never built")
+}
+
+@Test func aCommitGitHubHasntGotIsRefused() throws {
+    let r = try Release()
+    let run = try r.run(env: ["STUB_NO_COMMIT": "1"])
+    #expect(run.code == 1, "\(run.said)")
+    #expect(run.said.contains("Push it first"))
+    #expect(!r.uploaded)
+}
+
+@Test func aTreeThatMovedDuringTheBuildIsRefused() throws {
+    let r = try Release()
+    let run = try r.run(env: ["STUB_MOVE": "1"])
+    #expect(run.code == 1, "\(run.said)")
+    #expect(run.said.contains("The tree moved"))
+    #expect(!r.uploaded)
+}
+
 @Test func aReleaseOnlyEverGoesOutByHandAndAsOneFile() throws {
     let script = try String(contentsOf: repo.appendingPathComponent("scripts/release.sh"), encoding: .utf8)
     #expect(script.contains("gh release create $TAG dist/$DMG dist/appcast.xml"), "the image, and the feed that points at it")

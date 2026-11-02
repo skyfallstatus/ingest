@@ -301,6 +301,40 @@ private final class Plugged: @unchecked Sendable {
         #expect(c.error?.contains("read again") == true, "\(c.error ?? "")")
     }
 
+    // Found by the self-test on real clips. A pulled card makes its files lose their proof, which starts a re-read, so by the
+    // time anyone hears the card has gone it can be mid-check, and the session went with no word to anyone.
+    @Test func `A card pulled while its job's files are being read again still says so`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("the job") { !c.isBusy && c.pendingDestination != nil && (c.phase == .finished || c.phase == .ready) && !c.isMatching }
+        for phase in [CardSession.Phase.checking(done: 0, total: 1), .reading(done: 0, total: 0)] {
+            c.phase = phase
+            c.states["one.bin"] = .missing
+            c.volumeGone = false
+            c.error = nil
+            w.model.cards = [c]
+            c.volume.anchor?.retire()
+            w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+            await w.model.refresh()
+            #expect(w.model.cards.contains { $0 === c }, "it stays on screen")
+            #expect(c.volumeGone && c.phase == .stopped, "\(c.phase)")
+        }
+    }
+
+    @Test func `Nothing is read again from a card that has gone`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the rescan") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        let before = c.control.bytesChecked
+        c.volume.anchor?.retire()
+        w.model.lookAgain()
+        await w.until("the look") { c.verdict != .safe }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(c.control.bytesChecked == before)
+        #expect(!c.isMatching)
+    }
+
     // The review's N08.
     @Test func `First-run setup waits for a volume it has to ask about`() async {
         let w = Bench()

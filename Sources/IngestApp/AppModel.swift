@@ -218,8 +218,10 @@ import UserNotifications
 
         // A card pulled out mid-copy stays on screen: someone needs to hear about it.
         for c in cards where !stillHere(c.volume) && !c.ejected {
-            // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too.
-            let cutShort = c.phase == .ready && c.pendingDestination != nil && c.filesToGo > 0
+            // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too, and
+            // so does one already being read again, because losing the card is what took its proof.
+            let settling = switch c.phase { case .ready, .reading, .checking: true; default: false }
+            let cutShort = settling && c.pendingDestination != nil && c.filesToGo > 0
             if c.phase == .copying || cutShort {
                 c.error = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
                 c.volumeGone = true
@@ -533,7 +535,7 @@ import UserNotifications
         let lost = states.contains { rel, state in
             if case .verified = state, case .verified? = end.states[rel] { false } else if case .verified = state { true } else { false }
         }
-        if lost { rematch(c) }
+        if lost, c.volume.isCurrent, drive.isCurrent { rematch(c) }
     }
 
     /// One more pass, now if nothing's running, or as soon as what's running is done.

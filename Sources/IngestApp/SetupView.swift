@@ -82,6 +82,14 @@ struct WaitingForDrive: View {
             VStack(alignment: .leading, spacing: 0) {
                 if waiting {
                     SetupLine(label: "Waiting for a drive", value: "", mark: .running)
+                    ForEach(model.ignored) { v in
+                        HStack(spacing: 8) {
+                            Text(v.name).font(.body13).kerning(-0.08).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if !v.isReadOnly { Button("It's a Drive") { model.setRole("drive", for: v) }.buttonStyle(ActionStyle(kind: .quiet, small: true)) }
+                        }
+                        .frame(height: 30)
+                    }
                 } else {
                     ForEach(model.drives) { d in
                         HStack(spacing: 8) {
@@ -95,7 +103,7 @@ struct WaitingForDrive: View {
                 }
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 9)
-            Foot(bottom: BottomLine(kind: .idle, title: waiting ? "Plug in your working drive" : "Choose your working drive", sentence: "It's where your footage goes.")) { EmptyView() }
+            Foot(bottom: CardSheet.waitingForDrive(model: model)) { EmptyView() }
         }
     }
 }

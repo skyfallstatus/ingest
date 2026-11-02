@@ -402,7 +402,7 @@ import SwiftUI
         pulled.phase = .stopped; pulled.volumeGone = true; pulled.error = "F was removed while copying."
         model.cards = [pulled]
         check("card pulled: the bar says so", MenuBarState.make(model).word == "Card pulled", MenuBarState.make(model).word)
-        check("stopped: Resume is on the drive line", CardSheet.make(pulled, model: model).line(.drive)?.actions == [.resume])
+        check("card pulled: it can be dismissed, and nothing pretends to resume", CardSheet.make(pulled, model: model).line(.drive)?.actions == [.dismiss])
         model.cards = others
 
         // Behind the one quiet control, inside the widget

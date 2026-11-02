@@ -217,7 +217,8 @@ import UserNotifications
         func stillHere(_ v: Volume) -> Bool { v.isCurrent && found.contains { $0.0.path == v.path && $0.0.key == v.key } }
 
         // A card pulled out mid-copy stays on screen: someone needs to hear about it.
-        for c in cards where !stillHere(c.volume) && !c.ejected {
+        // One already marked stays too, whatever its job has done since, until the card is back or someone dismisses it.
+        for c in cards where !stillHere(c.volume) && !c.ejected && !c.volumeGone {
             // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too, and
             // so does one already being read again, because losing the card is what took its proof.
             let settling = switch c.phase { case .ready, .reading, .checking: true; default: false }
@@ -228,6 +229,7 @@ import UserNotifications
                 c.verdict = nil
                 c.control.stop()
                 if cutShort { c.phase = .stopped }
+                notify(title: "Don't format \(c.name)", body: c.error ?? "It came out before it was finished.")
             } else { queue.removeAll { $0 === c }; cards.removeAll { $0 === c } }
         }
         drives.removeAll { d in
@@ -723,6 +725,12 @@ import UserNotifications
         guard let d = c.pendingDestination else { recheck(c); return }     // a check that was stopped, with nothing to copy
         c.error = nil
         start(c, destination: d, extraFolders: c.extraFolders)
+    }
+
+    /// A pulled card that isn't coming back. It stays on screen until it's back, or until someone says they've seen it.
+    func dismiss(_ c: CardSession) {
+        queue.removeAll { $0 === c }
+        cards.removeAll { $0 === c }
     }
 
     /// Reads a card and its copy again from the start. Someone asked, so nothing is carried over from before.

@@ -18,7 +18,7 @@ enum LineMark: Equatable {
 }
 
 enum LineAction: Hashable {
-    case resume, copyAgain(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, useDrive(id: String, name: String), setUpDrive(id: String, name: String)
+    case resume, copyAgain(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, dismiss, useDrive(id: String, name: String), setUpDrive(id: String, name: String)
 
     var title: String {
         switch self {
@@ -28,6 +28,7 @@ enum LineAction: Hashable {
         case .chooseFolder: "Choose Folder…"
         case .showInFinder: "Show in Finder"
         case .notACard: "Not a Card"
+        case .dismiss: "Dismiss"
         case .useDrive(_, let name): "Use \(name)"
         case .setUpDrive(_, let name): "Set Up \(name)…"
         }
@@ -37,7 +38,7 @@ enum LineAction: Hashable {
     var isFix: Bool {
         switch self {
         case .resume, .copyAgain, .checkAgain, .useDrive, .setUpDrive: true
-        case .chooseFolder, .showInFinder, .notACard: false
+        case .chooseFolder, .showInFinder, .notACard, .dismiss: false
         }
     }
 }
@@ -275,7 +276,8 @@ struct CardSheet: Equatable {
         }
         if s.failed {
             if !s.checkFailures.isEmpty, s.copyFailures.isEmpty {
-                return no("\(plural(s.checkFailures.count)) didn't match.", .failed)
+                // A bad copy already on the drive is exactly when a real one is needed, so the form keeps its button.
+                return no("\(plural(s.checkFailures.count)) didn't match.", .failed, s.canName ? .copy(s.toGo) : nil)
             }
             // What can be read can still be rescued, so the form that's open keeps its button.
             if s.toGo > 0 { return no(onlyHere(s.toGo), .failed, s.canName ? .copy(s.toGo) : nil) }
@@ -353,7 +355,7 @@ struct CardSheet: Equatable {
         case .stopped:
             show(s.settledFiles, s.verifiedBytes)
             if let e = s.copyError { line.detail = [e]; line.mark = .failed }   // the bottom line already says it stopped
-            line.actions = [.resume]
+            line.actions = c.volumeGone ? [.dismiss] : [.resume]    // nothing can resume with the card gone, and it can't stay for ever
             return line
         case .ready, .finished:
             break
@@ -466,6 +468,15 @@ struct CardSheet: Equatable {
         }
         line.detail += s.notes.prefix(2).map(\.message)
         return line
+    }
+
+    /// Setup's last line while it waits. With a drive plugged in that can't be used, waiting is the wrong thing to say.
+    @MainActor static func waitingForDrive(model: AppModel) -> BottomLine {
+        if !model.drives.isEmpty { return BottomLine(kind: .idle, title: "Choose your working drive", sentence: "It's where your footage goes.") }
+        if let v = model.ignored.first {
+            return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "\(v.name) can't be one yet: \(model.whyIgnored(v))")
+        }
+        return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "It's where your footage goes.")
     }
 
     @MainActor private static func path(_ s: Facts) -> String? {

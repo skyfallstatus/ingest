@@ -4,10 +4,17 @@ import Testing
 @testable import IngestApp
 @testable import IngestCore
 
-private let setUp: Void = { setenv("INGEST_SUPPORT_DIR", NSTemporaryDirectory() + "ingest-app-tests-" + UUID().uuidString, 1) }()
+/// Everything a run makes goes in one folder, and goes with the run. A suite leaves nothing on the Mac.
+private let scratch: String = {
+    let p = NSTemporaryDirectory() + "ingest-app-tests-" + UUID().uuidString
+    atexit { try? FileManager.default.removeItem(atPath: scratch) }
+    return p
+}()
+
+private let setUp: Void = { setenv("INGEST_SUPPORT_DIR", scratch + "/support", 1) }()
 
 private func temp() -> String {
-    let p = NSTemporaryDirectory() + "ingest-app-test-" + UUID().uuidString
+    let p = scratch + "/" + UUID().uuidString
     try! FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
     return p
 }
@@ -333,6 +340,87 @@ private final class Plugged: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(200))
         #expect(c.control.bytesChecked == before)
         #expect(!c.isMatching)
+    }
+
+    // The second review's B2: "didn't match" went out with no Copy button, in the very case the app exists for.
+    @Test func `A bad copy on the drive doesn't take the Copy button away`() async throws {
+        let w = Bench()
+        var card = try Data(contentsOf: URL(fileURLWithPath: w.card + "/one.bin"))
+        card[500_000] ^= 0xFF
+        put(w.a + "/Sorted/one.bin", card)      // the right name, size and ends, and a bad middle
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        let live = w.drive(w.driveA)
+        live.setup = ShootPlanner.presets()[0].setup
+        w.model.use(drive: live)
+        let c = w.model.cards[0]
+        await w.until("the scan and the check") { !live.isScanning && !c.isMatching && c.phase == .ready && { if case .failed? = c.states["one.bin"] { true } else { false } }() }
+        let sheet = CardSheet.make(c, model: w.model)
+        #expect(sheet.bottom.sentence == "1 file didn't match.")
+        #expect(sheet.showsNaming)
+        #expect(sheet.bottom.action == .copy(c.filesToGo))
+    }
+
+    /// A copy under way, with the card pulled from under it.
+    private func cardPulledMidCopy(_ w: Bench) async -> CardSession {
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        c.volume.anchor?.retire()
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        return c
+    }
+
+    // The second review's R01: the warning went about a second after the job stopped, and the widget said no card was ever there.
+    @Test func `A pulled card's warning stays after the job stops`() async throws {
+        let w = Bench()
+        let c = await cardPulledMidCopy(w)
+        await w.until("the job to stop") { !c.isBusy }
+        try await Task.sleep(for: .milliseconds(600))      // past the look the job's end asks for
+        await w.model.refresh()
+        #expect(w.model.cards.contains { $0 === c }, "the session has to outlive the job")
+        #expect(c.volumeGone)
+        #expect(MenuBarState.make(w.model).word == "Card pulled", "\(MenuBarState.make(w.model).word)")
+        #expect(w.model.notified.contains { $0.contains("Don't format") }, "and anyone not watching gets told: \(w.model.notified)")
+    }
+
+    @Test func `A pulled card can be dismissed, and goes when it's back`() async throws {
+        let w = Bench()
+        let c = await cardPulledMidCopy(w)
+        await w.until("the job to stop") { !c.isBusy }
+        #expect(CardSheet.make(c, model: w.model).line(.drive)?.actions == [.dismiss])
+        w.plugged.now = [(volume(w.card, "CARD"), .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        #expect(w.model.cards.first.map { $0 !== c } == true, "the card itself is the best dismissal")
+        let again = try #require(w.model.cards.first)
+        again.volume.anchor?.retire()
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        let second = await cardPulledAgain(w, again)
+        w.model.dismiss(second)
+        #expect(w.model.cards.isEmpty)
+    }
+
+    private func cardPulledAgain(_ w: Bench, _ c: CardSession) async -> CardSession {
+        c.volumeGone = true
+        c.phase = .stopped
+        w.model.cards = [c]
+        await w.model.refresh()
+        return c
+    }
+
+    // The second review's R05: setup covered the reason, at the one moment a new tester needs it.
+    @Test func `Setup says why a plugged-in drive can't be used`() async {
+        let w = Bench()
+        var ntfs = volume(w.a, "NTFS"); ntfs.isReadOnly = true
+        w.plugged.now = [(ntfs, .ignored)]
+        await w.model.refresh()
+        let foot = CardSheet.waitingForDrive(model: w.model)
+        #expect(foot.sentence.contains("NTFS") && foot.sentence.contains("read-only"), "\(foot.sentence)")
+        w.plugged.now = []
+        await w.model.refresh()
+        #expect(CardSheet.waitingForDrive(model: w.model).sentence == "It's where your footage goes.")
     }
 
     // The review's N08.

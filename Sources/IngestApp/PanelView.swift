@@ -178,6 +178,7 @@ private struct LineDetail: View {
         case .chooseFolder: Windows.shared.chooseFolder(card: card, model: model)
         case .showInFinder(let rel): model.reveal(rel, of: card)
         case .notACard: model.forgetChoice(for: card.volume)
+        case .dismiss: model.dismiss(card)
         case .useDrive(let id, _):
             guard let d = model.drives.first(where: { $0.id == id }) else { return }
             model.use(drive: d)

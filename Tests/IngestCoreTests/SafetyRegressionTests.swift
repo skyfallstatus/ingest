@@ -610,11 +610,25 @@ private func editMiddle(_ path: String) {
     put(card + "/C0001.MP4", rnd(1_000_000))
     let read = CardReader.read(root: card, kind: kind)
     _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
-    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Again"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    let ledger = Ledger(driveRoot: drive)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Again"), ledger: ledger, control: IngestControl()) { _ in }
     #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "Again/C0001.MP4"))
-    // And that's the copy a later visit finds, so a card on hold has a way back to green.
-    #expect(CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Again/C0001.MP4"))
+    // And that's the copy a later visit finds, so a card on hold has a way back to green. Here the weak record is the
+    // older one in this ledger, and journals load in no set order, so it has to be chosen, not lucky.
+    let weakFirst = Ledger(driveRoot: drive)
+    #expect(CardMatcher.match(read: read, ledger: weakFirst, index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Again/C0001.MP4"))
+    #expect(CardMatcher.match(read: read, ledger: ledger, index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Again/C0001.MP4"))
     #expect(try laterVisit(card, drive).weak == false)
+}
+
+@Test func theOldestRecordInALedgerIsNotAlwaysTheOneToFollow() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    let ledger = Ledger(driveRoot: drive)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Weak"), ledger: ledger, control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Good"), ledger: ledger, control: IngestControl()) { _ in }
+    #expect(CardMatcher.match(read: read, ledger: ledger, index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Good/C0001.MP4"))
 }
 
 // The review's A-09: reads were compared with each other and never with the listing, so two equal short reads passed.
@@ -943,6 +957,21 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
     #expect(out.states["C0001.MP4"] == .failed("an empty file already has that name on the drive"))
     #expect(fm.fileExists(atPath: drive + "/S/C0001.MP4"))
+}
+
+// Whatever a dead job meant to do with that name, a file with bytes in it isn't a reservation, and it isn't the app's to remove.
+@Test func aFileWithBytesAtAnAbandonedReservationIsLeftAlone() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1000))
+    let dead = Ledger(driveRoot: drive)
+    let journal = try dead.open(LedgerHeader(job: "DEAD", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    journal.note(.reserve, "S/theirs.bin")
+    journal.close()
+    let theirs = rnd(500)
+    put(drive + "/S/theirs.bin", theirs)
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(fm.contents(atPath: drive + "/S/theirs.bin") == theirs)
 }
 
 @Test func aReservationGivenBackIsNeverSwept() throws {

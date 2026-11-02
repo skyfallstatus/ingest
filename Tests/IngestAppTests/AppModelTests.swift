@@ -199,6 +199,30 @@ private final class Plugged: @unchecked Sendable {
         #expect(c.verdict != .safe)
     }
 
+    // The other half of A3: an older look landing after a newer one must not bring its green back.
+    @Test func `An older look can't land over a newer one`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the rescan") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        var release: CheckedContinuation<Void, Never>?
+        var held = false
+        let oldest = c.looks + 1
+        w.model.lookLandsLate = { look in
+            guard look == oldest else { return }
+            await withCheckedContinuation { release = $0; held = true }
+        }
+        w.model.lookAgain()
+        await w.until("the first look to reach the end, finding nothing wrong") { held }
+        let h = FileHandle(forUpdatingAtPath: w.a + "/S/one.bin")!
+        try h.seek(toOffset: 5000); try h.write(contentsOf: Data([1, 2, 3])); try h.close()
+        w.model.lookAgain()
+        await w.until("the newer look") { c.verdict != .safe && !c.isMatching }
+        release?.resume()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!c.isSafe(on: w.model.workingDrive))
+        #expect(c.verdict != .safe)
+    }
+
     // The review's A5: a file that lost its proof was called only on the card, and nothing read it again.
     @Test func `A file that lost its proof is read again, and comes back by itself`() async throws {
         let w = Bench()

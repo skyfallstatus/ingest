@@ -157,6 +157,7 @@ import UserNotifications
     private var announced: Set<String> = []     // what's already had its moment on screen
     private var askedPermission = false
     private var looks = 0                       // the newest look at the volumes wins, whatever order they land in
+    var lookLandsLate: (@MainActor (Int) async -> Void)?    // tests: holds a last look back, to land it out of order
     /// Every volume and what it is. Off the main thread: the first read can wait on a permission prompt.
     var findVolumes: @Sendable (_ allowDiskImages: Bool, _ overrides: [String: String]) -> [(Volume, VolumeRole)] = { allow, overrides in
         VolumeWatcher.scan(allowDiskImages: allow).map { ($0, VolumeWatcher.role(of: $0, overrides: overrides)) }
@@ -523,6 +524,7 @@ import UserNotifications
             let issues = Pipeline.settle(issues: probed, states: states, weak: weak, driveRoot: root, ledger: ledger)
             return Pipeline.conclude(read: read, states: states, proved: proved, issues: issues, driveRoot: root, kind: Self.kind)
         }.value
+        await lookLandsLate?(look)
         guard look == c.looks, !c.isBusy, c.provedOn === drive, workingDrive === drive else { return }
         c.issues = end.issues; c.states = end.states; c.verdict = end.verdict
         c.proved = c.proved.filter { if case .verified? = end.states[$0.key] { true } else { false } }

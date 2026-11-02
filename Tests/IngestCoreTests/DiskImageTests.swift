@@ -128,6 +128,20 @@ struct DiskImageTests {
         #expect(fm.contents(atPath: from) == Data("NEW".utf8), "and the proved file is still at its temporary name")
     }
 
+    @Test func `A writer that renames an empty file onto the name keeps it`() throws {
+        let image = try Image(), from = image.root + "/from", to = image.root + "/to"
+        put(from, Data("NEW".utf8))
+        let theirs: @convention(c) (UnsafePointer<CChar>?, Int32) -> Void = { to, done in
+            guard done == 1 else { return }
+            let side = String(cString: to!) + ".their"
+            FileManager.default.createFile(atPath: side, contents: Data())
+            rename(side, to!)                                          // empty, so only its identity can tell
+        }
+        #expect(withFaults(reserving: theirs) { publish(from, to) } == EEXIST)
+        #expect(fm.contents(atPath: to) == Data())
+        #expect(fm.contents(atPath: from) == Data("NEW".utf8), "and the proved file is still at its temporary name")
+    }
+
     // The reviews' A1 and the real card: a real job on real exFAT, and the ID that really moved.
     @Test func `An empty file on exFAT stays proved whatever its made-up ID does`() throws {
         let card = temp(), image = try Image(), drive = image.root

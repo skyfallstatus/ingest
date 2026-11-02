@@ -1876,6 +1876,15 @@ private func joinable(_ change: (String, String) -> Void) -> Bool {
     var split = whole
     split["CLIP/B.MP4"] = state("Foot/B", "CLIP/B.MP4")
     #expect(Pipeline.homes(read: read, states: split) == ["Foot/A", "Foot/B"])
+    var sorted = whole
+    sorted["CLIP/B.MP4"] = .verified(drivePath: "Picks/B.MP4", hash: "1", bytes: 10)
+    #expect(Pipeline.homes(read: read, states: sorted) == ["Foot/A", "Picks"], "a file sorted by hand is in the folder it's in")
+    sorted["CLIP/B.MP4"] = .verified(drivePath: "B.MP4", hash: "1", bytes: 10)
+    #expect(Pipeline.homes(read: read, states: sorted) == ["", "Foot/A"], "and the top of the drive is a place too")
+    var flat = whole
+    flat["CLIP/A.MP4"] = .verified(drivePath: "Picks/A.MP4", hash: "1", bytes: 10)
+    flat["CLIP/B.MP4"] = .verified(drivePath: "Picks/B.MP4", hash: "1", bytes: 10)
+    #expect(Pipeline.homes(read: read, states: flat).isEmpty, "all of it in one folder, sorted or not, is one folder")
 }
 
 // Nothing a person reads talks about flushes or caches.

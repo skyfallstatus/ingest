@@ -1231,6 +1231,22 @@ extension AppModelTests {
         await w.until("Safe on the other drive") { c.isSafe(on: w.model.workingDrive) }
     }
 
+    @Test func `Safe on another drive names the folder on that drive`() async throws {
+        let w = Bench()
+        put(w.card + "/DCIM/A.JPG", rnd(2_000_000))
+        let read = CardReader.read(root: w.card) { CardProber.kind(ofRelativePath: $0) }
+        let job = Pipeline.makeJob(read: read, states: [:], cardName: "C", driveRoot: w.b, camera: nil, destination: Destination(footageRoot: "OnB/Place"), probe: ProbeResult(hasVideo: true), index: nil)
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.b), control: IngestControl()) { _ in }
+        let c = await w.safe()
+        c.shootLabel = "Old Client / Old Shoot"
+        #expect(CardSheet.make(c, model: w.model).path == "Old Client / Old Shoot", "and on its own drive it still says so")
+        #expect(w.model.foldersToShow(c) == [w.a + "/" + (c.destinationPath ?? "")])
+        w.model.use(drive: w.drive(w.driveB))
+        await w.until("Safe on the other drive") { c.isSafe(on: w.model.workingDrive) && !c.isMatching }
+        #expect(CardSheet.make(c, model: w.model).path == "OnB / Place", "\(String(describing: CardSheet.make(c, model: w.model).path))")
+        #expect(w.model.foldersToShow(c) == [w.b + "/OnB/Place"])
+    }
+
     /// A card out of the Mac halfway through a rescue: what it left is proved in two folders, and a new session can't know why.
     private func provedAcrossTwoFolders(_ w: Bench) throws {
         put(w.card + "/DCIM/A.JPG", rnd(2_000_000)); put(w.card + "/DCIM/B.JPG", rnd(2_000_000)); put(w.card + "/DCIM/C.JPG", rnd(2_000_000))
@@ -1242,6 +1258,26 @@ extension AppModelTests {
         part.listing.files = read.listing.files.filter { $0.name == "C.JPG" }
         let second = Pipeline.makeJob(read: part, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "Rescue"), probe: ProbeResult(hasVideo: true), index: nil)
         _ = try IngestEngine.run(job: second, ledger: Ledger(driveRoot: w.a), control: IngestControl()) { _ in }
+    }
+
+    @Test func `Safe with a file sorted by hand names that folder too`() async throws {
+        let w = Bench()
+        let picked = rnd(2_000_000)
+        put(w.card + "/DCIM/A.JPG", rnd(2_000_000)); put(w.card + "/DCIM/B.JPG", rnd(2_000_000)); put(w.card + "/DCIM/C.JPG", picked)
+        var part = CardReader.read(root: w.card) { CardProber.kind(ofRelativePath: $0) }
+        part.listing.files = part.listing.files.filter { $0.name != "C.JPG" }
+        let job = Pipeline.makeJob(read: part, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "Rushes/A082"), probe: ProbeResult(hasVideo: true), index: nil)
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.a), control: IngestControl()) { _ in }
+        put(w.a + "/Picks/C.JPG", picked)
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = w.model.cards[0]
+        await w.until("Safe") { c.isSafe(on: w.model.workingDrive) && !c.isMatching }
+        let sheet = CardSheet.make(c, model: w.model)
+        #expect(sheet.path == "In 2 folders", "\(String(describing: sheet.path))")
+        #expect(sheet.line(.drive)?.detail.contains("This card is proved across 2 folders: Picks and Rushes/A082. Keep both.") == true, "\(sheet.lines.map(\.detail))")
+        #expect(w.model.foldersToShow(c) == [w.a + "/Picks", w.a + "/Rushes/A082"])
     }
 
     @Test func `Safe across two folders names them both, and says to keep both`() async throws {

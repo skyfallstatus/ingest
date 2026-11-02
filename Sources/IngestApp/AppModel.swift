@@ -96,12 +96,17 @@ import UserNotifications
     var keptElsewhere = false           // a job took on files proved in another folder, so they're not only on the card
     var badCopyNote: String?            // what a rescue left where it was
     var folderError: String?            // why an empty folder couldn't be added
-    var destinationDrive: String?       // the drive `pendingDestination` is on
+    var destinationDrive: String?       // the drive `pendingDestination` is on, and the one `destinationPath` and `shootLabel` mean
     let draft = ShootDraft()
     let control = IngestControl()
 
     let id = UUID()     // a card pulled mid-copy can sit beside its own remount, so the volume can't be the identity
     init(volume: Volume) { self.volume = volume; self.name = Self.friendlyName(volume.name) }
+
+    /// A job's folder and name stay on the card when the working drive changes, so a Safe on another drive could name a folder that
+    /// isn't on it. They only speak for the drive the job went to.
+    func wentTo(_ drive: DriveState?) -> Bool { destinationDrive != nil && destinationDrive == drive?.volume.key }
+    func home(on drive: DriveState?) -> String? { (wentTo(drive) ? destinationPath : nil) ?? existingHome }
 
     static let genericNames: Set<String> = ["NO NAME", "UNTITLED", "EOS_DIGITAL", "NIKON", "CANON", "SD CARD", "SDCARD", "MEMORY CARD", "LUMIX", "SONY"]
     static func friendlyName(_ n: String) -> String { genericNames.contains(n.uppercased()) ? "Card" : n }
@@ -851,7 +856,7 @@ import UserNotifications
     func foldersToShow(_ c: CardSession) -> [String] {
         guard let drive = workingDrive else { return [] }
         let split = c.read.map { Pipeline.homes(read: $0, states: c.states) } ?? []
-        return (split.isEmpty ? [c.destinationPath ?? c.existingHome].compactMap { $0 } : split).map { drive.path + "/" + $0 }
+        return (split.isEmpty ? [c.home(on: drive)].compactMap { $0 } : split).map { drive.path + "/" + $0 }
     }
 
     func revealDestination(of c: CardSession) {

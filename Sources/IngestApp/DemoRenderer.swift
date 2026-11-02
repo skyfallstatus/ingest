@@ -68,6 +68,7 @@ import SwiftUI
         c.shootLabel = "Lantern Bakery Co. / 22.10.26 Spring menu"
         c.pendingDestination = Destination(footageRoot: home)
         c.destinationPath = home
+        c.destinationDrive = stagedDrive?.volume.key
         return c
     }
 

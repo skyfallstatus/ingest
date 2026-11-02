@@ -130,7 +130,7 @@ struct CardSheet: Equatable {
         var sheet = CardSheet(reel: reel, camera: camera.isEmpty ? nil : camera, bottom: bottom(s),
                               lines: [cardLine(s), driveLine(s), readLine(s, .readCard), readLine(s, .readDrive), clipsLine(s)])
         sheet.path = path(s)
-        sheet.canReveal = c.phase == .finished && (c.destinationPath != nil || c.existingHome != nil)
+        sheet.canReveal = c.phase == .finished && c.home(on: model.workingDrive) != nil
         sheet.showsNaming = s.canName
         // Add to would need a name that's taken, by a bad copy or by the index a camera has since rewritten.
         let canJoin = c.canJoinHome && !c.states.values.contains { $0.isBadCopyOnDrive }
@@ -527,9 +527,10 @@ struct CardSheet: Equatable {
     @MainActor private static func path(_ s: Facts) -> String? {
         let c = s.card
         if let split = s.split { return "In \(split.paths.count) folders" }
-        if let label = c.shootLabel { return label }
-        guard s.hasDestination || (s.everythingProved && !s.working), let home = c.destinationPath ?? c.existingHome else { return nil }
-        return homeLabel(home, setup: s.model.workingDrive?.setup)
+        let drive = s.model.workingDrive
+        if c.wentTo(drive), let label = c.shootLabel { return label }
+        guard s.hasDestination || (s.everythingProved && !s.working), let home = c.home(on: drive) else { return nil }
+        return homeLabel(home, setup: drive?.setup)
     }
 
     /// "Lantern Bakery Co. / 22.10.26 Spring menu", read back off a folder path.

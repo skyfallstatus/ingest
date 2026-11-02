@@ -151,12 +151,14 @@ public enum Pipeline {
     }
 
     /// The folders a card's footage is proved across, if that's more than one. Stills can have a folder of their own, so they're
-    /// counted apart, and only footage counts: a marker every card shares can be proved anywhere.
+    /// counted apart, and only footage counts: a marker every card shares can be proved anywhere. A file at its own place belongs to
+    /// the folder its card's tree starts in. One sorted by hand belongs to the folder it's in, and "" is the top of the drive.
     public static func homes(read: CardRead, states: [String: FileState]) -> [String] {
         var found: [Bool: Set<String>] = [:]
         for f in read.listing.files where f.kind == .video || f.kind == .audio || f.kind == .still {
-            guard case .verified(let drive, _, _)? = states[f.relPath], drive.hasSuffix("/" + f.relPath) else { continue }
-            found[f.kind == .still, default: []].insert(String(drive.dropLast(f.relPath.count + 1)))
+            guard case .verified(let drive, _, _)? = states[f.relPath] else { continue }
+            let folder = drive == f.relPath ? "" : drive.hasSuffix("/" + f.relPath) ? String(drive.dropLast(f.relPath.count + 1)) : (drive as NSString).deletingLastPathComponent
+            found[f.kind == .still, default: []].insert(folder)
         }
         return found.values.filter { $0.count > 1 }.flatMap { $0 }.sorted()
     }
@@ -166,8 +168,9 @@ public enum Pipeline {
     /// Every byte can be proved with a card in two places, and that's no reason to hold it. But Safe is when someone tidies up.
     private static func splitNote(read: CardRead, states: [String: FileState]) -> CardIssue? {
         let homes = homes(read: read, states: states)
-        guard let last = homes.last else { return nil }
-        let names = homes.dropLast().joined(separator: ", ") + " and " + last
+        let shown = homes.map { $0.isEmpty ? "the top of the drive" : $0 }
+        guard let last = shown.last else { return nil }
+        let names = shown.dropLast().joined(separator: ", ") + " and " + last
         return CardIssue(severity: .note, code: splitCode, message: "This card is proved across \(homes.count) folders: \(names). Keep \(homes.count == 2 ? "both" : "them all").", paths: homes)
     }
 

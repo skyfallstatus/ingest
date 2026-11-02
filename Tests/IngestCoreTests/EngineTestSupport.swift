@@ -22,6 +22,16 @@ private let scratch: String = {
     return p
 }()
 
+/// A switch a fault hook can flip from the engine's thread.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var on: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
 func temp() -> String {
     let p = scratch + "/" + UUID().uuidString
     try! FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)

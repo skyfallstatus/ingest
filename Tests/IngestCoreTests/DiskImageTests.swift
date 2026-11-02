@@ -40,20 +40,86 @@ private final class Image {
 private let kind: (String) -> FileKind = { _ in .video }
 private let fm = FileManager.default
 
-/// A switch a fault hook can flip from the engine's thread.
-private final class Flag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
-    var on: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return value }
-        set { lock.lock(); value = newValue; lock.unlock() }
-    }
-}
-
 private func publish(_ from: String, _ to: String) -> Int32 { IngestEngine.publish(from, as: to, drivePath: "to", journal: nil) }
 
 @Suite("Real volumes", .serialized)
 struct DiskImageTests {
+    /// A real full exFAT drive: a record fails with its bytes half down and the file's end moved, so nothing marks where it stops.
+    private func fillUntilARecordFails(_ journal: LedgerJournal, _ drive: String, like line: LedgerEntry) -> String {
+        let filler = drive + "/filler.bin"
+        let fd = open(filler, O_CREAT | O_WRONLY, 0o644)
+        var buf = [UInt8](repeating: 0, count: 1 << 20)
+        for size in [buf.count, 4096] { while write(fd, &buf, size) > 0 {} }
+        fsync(fd); close(fd)
+        for i in 0 ..< 200_000 {
+            var e = line; e.cardPath = "PAD\(i).MP4"; e.drivePath = "S/PAD\(i).MP4"
+            if (try? journal.record(e)) == nil { return filler }
+        }
+        Issue.record("no record failed")
+        return filler
+    }
+
+    private func visit(_ card: String, _ drive: String, _ read: CardRead, record: Bool) -> CardVerdict {
+        let ledger = Ledger(driveRoot: drive)
+        let f = read.listing.files[0]
+        let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(f, "S/" + f.relPath, read.quick[f.relPath]!)], ledger: ledger, jobName: "x", control: IngestControl(), record: record) { _, _ in }
+        let issues = Pipeline.settle(issues: [], states: r.states, weak: r.weak, driveRoot: drive, ledger: ledger)
+        return Pipeline.conclude(read: read, states: r.states, proved: r.proofs, issues: issues, driveRoot: drive, kind: kind).verdict
+    }
+
+    private func entry(_ card: String, _ read: CardRead, weak: Bool? = nil) -> LedgerEntry {
+        let f = read.listing.files[0]
+        return LedgerEntry(cardPath: f.relPath, drivePath: "S/" + f.relPath, size: f.size, quick: read.quick[f.relPath]!,
+                           hash: hexHash(ci_hash_uncached(card + "/" + f.relPath, nil, nil, nil).hash), weak: weak)
+    }
+
+    @Test func `A failed record on a full drive can't swallow a refusal after it`() throws {
+        let card = temp(), image = try Image(size: "600m"), drive = image.root
+        put(card + "/C0001.MP4", rnd(1_000_000))
+        let read = CardReader.read(root: card, kind: kind)
+        let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "TORN", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+        try journal.begin()
+        put(drive + "/S/C0001.MP4", fm.contents(atPath: card + "/C0001.MP4")!)
+        let line = entry(card, read)
+        try journal.record(line)
+        let filler = fillUntilARecordFails(journal, drive, like: line)
+        unlink(filler)
+        _ = journal.seal([line], flushVolume: { EIO })
+        journal.close()
+        guard case .hold = visit(card, drive, read, record: true) else { Issue.record("the refusal has to be on the record"); return }
+    }
+
+    @Test func `A failed record on a full drive can't swallow a weak mark after it`() throws {
+        let card = temp(), image = try Image(size: "600m"), drive = image.root
+        put(card + "/C0001.MP4", rnd(1_000_000))
+        let read = CardReader.read(root: card, kind: kind)
+        let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "TORN", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+        try journal.begin()
+        put(drive + "/S/C0001.MP4", fm.contents(atPath: card + "/C0001.MP4")!)
+        var other = entry(card, read); other.drivePath = "S/OTHER.MP4"
+        try journal.record(other)
+        let filler = fillUntilARecordFails(journal, drive, like: other)
+        unlink(filler)
+        try journal.record(entry(card, read, weak: true))
+        #expect(journal.seal([], flushVolume: { 0 }))
+        journal.close()
+        guard case .hold = visit(card, drive, read, record: true) else { Issue.record("a weak mark has to be on the record"); return }
+    }
+
+    @Test func `A read-only drive can't finish a copy whose record was lost`() throws {
+        let card = temp(), image = try Image(), drive = image.root
+        put(card + "/C0001.MP4", rnd(2_000_000))
+        let read = CardReader.read(root: card, kind: kind)
+        let dying = Flag()
+        _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                 hooks: FaultHooks(afterCopy: { _, _, _ in dying.on = true }, syncVolume: { _ in 0 }, journalFails: { dying.on })) { _ in }
+        #expect(fm.fileExists(atPath: drive + "/S/C0001.MP4"), "the attack needs the file with no record of it")
+        image.detach()
+        image.attach(readOnly: true)
+        guard case .hold = visit(card, drive, read, record: false) else { Issue.record("a look can't finish it"); return }
+        guard case .hold = visit(card, drive, read, record: true) else { Issue.record("and there's no flush to be had"); return }
+    }
+
     @Test func `An unmount kills a mount for good, and doesn't have to ask its leave`() throws {
         let image = try Image()
         let anchor = try #require(MountAnchor(path: image.root))

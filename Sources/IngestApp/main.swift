@@ -53,7 +53,7 @@ import IngestCore
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard Windows.shared.mayQuit(model: Self.model) else { return .terminateCancel }
         guard Self.model.isCopying else { return .terminateNow }
-        // A stopped job still has to end properly. One that's killed never seals, and stays weak for good.
+        // A stopped job still has to end properly. One that's killed never seals, and holds until a later check finishes it.
         Task { @MainActor in
             for _ in 0..<600 where Self.model.isCopying { try? await Task.sleep(for: .milliseconds(50)) }
             NSApp.reply(toApplicationShouldTerminate: true)

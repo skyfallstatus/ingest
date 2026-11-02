@@ -23,9 +23,10 @@ public enum Pipeline {
         return d.footageRoot
     }
 
-    /// Everything still to copy, plus the card's folders so empty ones survive.
-    /// A file is only left out if it's proved on this drive as mounted now. A verified state on its own is a claim about
-    /// wherever it was made, and `proved` is what ties it down. Whether the file is still that file is for `conclude`.
+    /// Every file that isn't already at its place in the folder this job is going to, plus the card's folders so empty ones
+    /// survive. A whole card goes to one folder, whatever else is on the drive. A file is only left out if it's proved at that
+    /// place on this drive as mounted now. A verified state on its own is a claim about wherever it was made, and `proved` is
+    /// what ties it down. Whether the file is still that file is for `conclude`.
     public static func makeJob(read: CardRead, states: [String: FileState], proved: [String: Proof] = [:], cardName: String, driveRoot: String,
                                camera: CameraIdentity?, destination: Destination, probe: ProbeResult, index: DriveIndex?) -> IngestJob {
         var items: [IngestItem] = []
@@ -48,10 +49,10 @@ public enum Pipeline {
             if hits.count == 1, let hit = hits.first, hit.size > 0 { partnerDir[f.relPath] = (hit.path as NSString).deletingLastPathComponent }
         }
         for f in read.listing.files {
-            if case .verified? = states[f.relPath], proved[f.relPath]?.isFor(driveRoot: driveRoot) == true { continue }
             guard let quick = read.quick[f.relPath] else { continue }
             var path = drivePath(for: f, destination: destination, hasVideo: probe.hasVideo)
             if let dir = partnerDir[f.relPath] { path = dir + "/" + f.name }
+            if case .verified(path, _, _)? = states[f.relPath], proved[f.relPath]?.isFor(driveRoot: driveRoot) == true { continue }
             items.append(IngestItem(file: f, drivePath: path, quick: quick))
         }
         return IngestJob(cardRoot: read.listing.root, cardName: cardName, driveRoot: driveRoot, camera: camera,

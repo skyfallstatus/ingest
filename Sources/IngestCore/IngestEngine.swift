@@ -82,7 +82,9 @@ public enum IngestEngine {
         for rel in [job.destination] + job.dirsToCreate + job.items.map(\.drivePath) where !Ledger.isInsideDrive(rel) {
             throw IngestError.outsideDrive(rel)
         }
-        let need = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
+        // A file already at its place is read, not copied.
+        let target = ResolvedRoot(job.driveRoot)
+        let need = job.items.reduce(UInt64(0)) { sum, i in target.map { pathExists($0.file(i.drivePath)) } == true ? sum : sum + i.file.size }
         var fs = statfs()
         guard statfs(job.driveRoot, &fs) == 0 else { throw IngestError.driveNotWritable(job.driveRoot) }
         var free = UInt64(fs.f_bavail) * UInt64(fs.f_bsize)
@@ -112,7 +114,7 @@ public enum IngestEngine {
 
         var made = Set<String>()
         try makeDir(tempFolder, root: root, made: &made)
-        sweep(root: root, ledger: ledger)
+        sweep(root: root, ledger: ledger, wanted: Set(job.items.map(\.drivePath)))
         for d in job.dirsToCreate { try makeDir(d, root: root, made: &made) }
 
         let total = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
@@ -152,7 +154,7 @@ public enum IngestEngine {
 
         // Only a name that's free now can end up reserved by this job. Anything already there isn't the app's to claim.
         let paths = job.items.map(\.drivePath)
-        journal.intend(paths.filter { !pathExists(root.file($0)) })
+        let listed = journal.intend(paths.filter { !pathExists(root.file($0)) })
 
         // A file already there will be read, so the drive is asked to finish what it's holding first, as a check does.
         let there = paths.filter { pathExists(root.file($0)) }
@@ -184,7 +186,7 @@ public enum IngestEngine {
                 if both.cancelled { break }
                 guard both.identical else {
                     states[item.file.relPath] = .failed(both.drive.stamp.size == 0 && both.readsOK && both.card.bytes != 0
-                        ? "an empty file already has that name on the drive" : "a different file already has that name on the drive")
+                        ? "an empty file already has that name on the drive" : FileState.nameTaken)
                     continue
                 }
                 let hash = hexHash(both.card.hash)
@@ -197,6 +199,7 @@ public enum IngestEngine {
                 continue
             }
 
+            guard listed else { states[item.file.relPath] = .failed("couldn't record this copy on the drive"); continue }     // a name goes on the list first
             let temp = root.file(tempFolder) + "/" + job.id + "." + String(i) + ".part"
             let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, journal: journal, control: control, hooks: hooks,
                                       checking: { report(.checking, i, item.file.name) },
@@ -317,7 +320,8 @@ public enum IngestEngine {
             let jobs = ledger.unfinishedJobs(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
             let closes = closing(jobs, first, weak: thisWeak, before: before[i], read: both.drive.stamp, ledger)
             let line = LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes, quick: c.quick, hash: hash, weak: thisWeak ? true : nil, closes: closes)
-            let kept = (try? journal?.record(line)) != nil
+            // A read that was due to close a job and couldn't says nothing, or its strong line would answer for that job's names.
+            let kept = !jobs.isEmpty && closes == nil && !thisWeak ? false : (try? journal?.record(line)) != nil
             if !jobs.isEmpty, closes == nil || !kept { weak = true }
             // A weak mark that won't stay on the drive can't stay weak on a later visit, so this can't count as proved.
             if record, thisWeak, journal == nil || !kept {
@@ -349,7 +353,7 @@ public enum IngestEngine {
             if !readsOK { return IngestEngine.describe(drive.stage != 0 ? drive : card, "checking") }
             if !twoFiles { return "what's on the drive isn't a separate copy of it" }
             if !whole { return "it's shorter than the size the card lists" }
-            return "the copy on the drive doesn't match the card"
+            return FileState.badCopy
         }
     }
 
@@ -395,11 +399,11 @@ public enum IngestEngine {
         return names.filter { $0.hasSuffix(".part") && !$0.hasPrefix("._") && !ledger.isLive(job: String($0.prefix { $0 != "." })) }.map { folder + "/" + $0 }
     }
 
-    /// Clears what a crash or a pulled drive left: its temps, and any real name it had reserved and never filled, which
-    /// would otherwise stand in the way of that very file for good.
-    static func sweep(root: ResolvedRoot, ledger: Ledger) {
+    /// Clears what a crash or a pulled drive left: its temps, and any real name it had reserved and never filled that this job
+    /// wants, which would otherwise stand in the way of that very file for good. Nobody else's job has any reason to touch it.
+    static func sweep(root: ResolvedRoot, ledger: Ledger, wanted: Set<String>) {
         for temp in staleTemps(folder: root.file(tempFolder), ledger: ledger) { discard(temp) }
-        for path in ledger.abandonedReservations() where root.stamp(path)?.size == 0 { discard(root.file(path)) }
+        for path in ledger.abandonedReservations() where wanted.contains(path) && root.stamp(path)?.size == 0 { discard(root.file(path)) }
     }
 
     private static func discard(_ temp: String) { unlink(temp); unlinkAppleDouble(of: temp) }

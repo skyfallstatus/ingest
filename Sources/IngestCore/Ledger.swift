@@ -91,13 +91,21 @@ public final class Ledger: @unchecked Sendable {
             unreadable = lstat(folder, &missing) == 0 || errno != ENOENT
             return
         }
-        let dec = JSONDecoder()
+        let dec = JSONDecoder(), headers = JSONDecoder()
+        headers.dateDecodingStrategy = .iso8601
+        // Oldest first, so the last record of a file is the newest. A job's file name is only an ID.
+        var journals: [(started: Date, wrote: Date, name: String, data: Data)] = []
         for n in names where n.hasSuffix(".jsonl") && !n.hasPrefix("._") {
             guard let data = FileManager.default.contents(atPath: folder + "/" + n) else { unreadable = true; continue }
+            let header = data.split(separator: 0x0A, maxSplits: 1).first.flatMap { try? headers.decode(LedgerHeader.self, from: Data($0)) }
+            let wrote = (try? FileManager.default.attributesOfItem(atPath: folder + "/" + n))?[.modificationDate] as? Date
+            journals.append((header?.started ?? .distantPast, wrote ?? .distantPast, n, data))
+        }
+        for (_, _, n, data) in journals.sorted(by: { ($0.started, $0.wrote, $0.name) < ($1.started, $1.wrote, $1.name) }) {
             var entries: [LedgerEntry] = []
             var opened = false, marksRefusals = false, sealed = false, refused = false
             var reserved: Set<String> = []
-            for line in data.split(separator: 0x0A).dropFirst() {  // the first line is the job header
+            for line in data.split(separator: 0x0A) {               // the job's header reads as none of these
                 if let mark = LedgerMark(line: line) {
                     switch mark {
                     case .opened: opened = true; marksRefusals = true
@@ -168,13 +176,14 @@ public final class Ledger: @unchecked Sendable {
     /// Where a copy of this card file was recorded, if it's still there. This is a hint about where to look, never proof:
     /// size and a head-and-tail fingerprint can't vouch for the middle of a clip, and the record can't vouch for the drive.
     /// Zero-sized listings never match: virtual volumes report 0 for real files.
-    func entry(size: UInt64, quick: String) -> LedgerEntry? {
+    func entry(size: UInt64, quick: String, notAt taken: Set<String> = []) -> LedgerEntry? {
         guard size > 0 else { return nil }
         lock.lock(); let list = byKey[Self.key(size: size, quick: quick)] ?? []; lock.unlock()
-        let present = list.filter { root?.stamp($0.drivePath)?.size == $0.size }
-        // A good copy beside a weak one is the one to look at, or the weak one would hold the card back for good.
+        let present = list.filter { !taken.contains($0.drivePath) && root?.stamp($0.drivePath)?.size == $0.size }
+        // A good copy beside a weak one is the one to look at, or the weak one would hold the card back for good. The newest
+        // comes first: a rescue is a newer copy, and an older one may be why it was needed.
         lock.lock(); defer { lock.unlock() }
-        return present.first { !weakPaths.contains($0.drivePath) } ?? present.first
+        return present.last { !weakPaths.contains($0.drivePath) } ?? present.last
     }
 
     /// What this drive's record says about a path, for a file that came from another card.
@@ -207,6 +216,10 @@ public final class Ledger: @unchecked Sendable {
     /// The drive can't be told, so at least this mount remembers.
     fileprivate func rememberWeak(_ entries: [LedgerEntry]) {
         for var e in entries { e.weak = true; remember(e) }
+    }
+
+    fileprivate func rememberWeak(names: Set<String>) {
+        lock.lock(); weakPaths.formUnion(names); lock.unlock()
     }
 
     fileprivate func rememberUnfinished(_ entries: [LedgerEntry], job: String) {
@@ -254,6 +267,7 @@ final class LedgerJournal: @unchecked Sendable {
     private let enc: JSONEncoder
     private let lock = NSLock()
     private var lastSync = DispatchTime.now().uptimeNanoseconds
+    private var names: Set<String> = []                    // listed and not given back
     private static let syncEvery: UInt64 = 250_000_000     // ns
     var fault: (@Sendable () -> Bool)?                     // tests: makes writing fail, as a dying drive would
     init(ledger: Ledger, handle: FileHandle, job: String) {
@@ -303,14 +317,20 @@ final class LedgerJournal: @unchecked Sendable {
     /// Gives a name back: it turned out to be someone else's.
     func release(_ path: String) {
         lock.lock(); defer { lock.unlock() }
+        names.remove(path)
         if let line = NameNote.release.line(path) { try? put(line) }
     }
     /// Every name this job may take, on the drive before it takes any of them. A pulled drive can keep a reservation and lose
     /// what was written just before it, so one flush now means a later job can always tell an empty file was the app's own.
-    func intend(_ paths: [String]) {
+    /// False if the list didn't reach the drive, and a job that can't list a name doesn't take it.
+    @discardableResult func intend(_ paths: [String]) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        for path in paths { if let line = NameNote.reserve.line(path) { try? put(line) } }
-        try? flush()
+        names.formUnion(paths)
+        do {
+            for path in paths { if let line = NameNote.reserve.line(path) { try put(line) } }
+            try flush()
+            return true
+        } catch { return false }
     }
     /// Asks the drive to confirm the job with `flushVolume`. True only if it did and that's on the record. A drive that says
     /// no gets `refused`, which is weak for good. If even that can't be written, the job reads as cut off, and only a later
@@ -324,6 +344,7 @@ final class LedgerJournal: @unchecked Sendable {
             try? put(LedgerMark.refused.line)
             try? flush()
             ledger.rememberWeak(entries)
+            ledger.rememberWeak(names: names)
         }
         return false
     }

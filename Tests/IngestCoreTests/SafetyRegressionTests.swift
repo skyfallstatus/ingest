@@ -1546,6 +1546,229 @@ private func oneFileCardCopied() throws -> (card: String, drive: String, read: C
     return (card, drive, read)
 }
 
+// MARK: Whole card, one folder
+
+/// What the app does with a card on a visit: match it, read what it can, then copy into `dest` whatever the job takes.
+private func matchThenCopy(_ card: String, _ drive: String, _ dest: String, kind k: @escaping (String) -> FileKind = kind) throws
+    -> (verdict: CardVerdict, job: IngestJob, states: [String: FileState], read: CardRead) {
+    let read = CardReader.read(root: card, kind: k)
+    let ledger = Ledger(driveRoot: drive)
+    var states = CardMatcher.match(read: read, ledger: ledger, index: DriveIndex.scan(root: drive), driveRoot: drive)
+    let likely: [(file: CardFile, drivePath: String, quick: String)] = read.listing.files.compactMap { f in
+        guard case .likely(let p)? = states[f.relPath], let q = read.quick[f.relPath] else { return nil }
+        return (f, p, q)
+    }
+    let checked = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: likely, ledger: ledger, jobName: "x", control: IngestControl()) { _, _ in }
+    for (k, v) in checked.states { states[k] = v }
+    var proved = checked.proofs
+    let job = Pipeline.makeJob(read: read, states: states, proved: proved, cardName: "T", driveRoot: drive, camera: nil,
+                               destination: Destination(footageRoot: dest), probe: ProbeResult(hasVideo: true), index: nil)
+    let out = try IngestEngine.run(job: job, ledger: ledger, control: IngestControl()) { _ in }
+    for (k, v) in out.states { states[k] = v }
+    proved.merge(out.proofs) { _, new in new }
+    let issues = Pipeline.settle(issues: [], states: states, weak: checked.weak || out.weakVerification, driveRoot: drive, ledger: ledger)
+    let end = Pipeline.conclude(read: read, states: states, proved: proved, issues: issues, driveRoot: drive, kind: k)
+    return (end.verdict, job, end.states, read)
+}
+
+@Test func aFileProvedElsewhereIsStillCopiedToWhereTheJobIsGoing() throws {
+    let (_, drive, read, _, out) = try provedCard()
+    func job(_ dest: String) -> IngestJob {
+        Pipeline.makeJob(read: read, states: out.states, proved: out.proofs, cardName: "T", driveRoot: drive, camera: nil,
+                         destination: Destination(footageRoot: dest), probe: ProbeResult(hasVideo: true), index: nil)
+    }
+    #expect(job("T").items.map(\.drivePath) == ["T/C0001.MP4"], "the job is going to T, so the card goes to T")
+    #expect(job("S").items.isEmpty, "a file already at its place stays proved, and isn't copied again")
+}
+
+@Test func aSecondCardGetsItsOwnCopyOfWhatCardsShare() throws {
+    let drive = temp(), a = temp(), b = temp(), marker = rnd(1_382_400)
+    let rels = ["AVF_INFO/AVIN0001.BNP", "SONY/SONYCARD.IND", "M4ROOT/CLIP/C0001.MP4"]
+    for c in [a, b] {
+        put(c + "/" + rels[0], marker); put(c + "/" + rels[1], Data()); put(c + "/" + rels[2], rnd(2_000_000))
+    }
+    #expect(try matchThenCopy(a, drive, "A").verdict == .safe)
+    let second = try matchThenCopy(b, drive, "B")
+    #expect(second.verdict == .safe)
+    for rel in rels { #expect(fm.fileExists(atPath: drive + "/B/" + rel), "\(rel)") }
+    #expect(try Pipeline.writeManifest(job: second.job, states: second.states, read: second.read))
+    let folder = drive + "/B/ascmhl/"
+    let name = try #require(try fm.contentsOfDirectory(atPath: folder).first { $0.hasSuffix(".mhl") })
+    let manifest = try String(contentsOfFile: folder + name, encoding: .utf8)
+    for rel in rels { #expect(manifest.contains(rel), "the manifest is the whole card: \(rel)") }
+}
+
+@Test func twinFilesOnACardAreBothCopied() throws {
+    let card = temp(), drive = temp(), same = rnd(300_000)
+    put(card + "/AVCHD/BDMV/INDEX.BDM", same)
+    put(card + "/AVCHD/BDMV/BACKUP/INDEX.BDM", same)
+    put(card + "/AVCHD/BDMV/STREAM/00000.MTS", rnd(2_000_000))
+    let read = CardReader.read(root: card, kind: kind), control = IngestControl()
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: control) { p in
+        if p.verifiedFiles >= 2 { control.stop() }
+    }
+    let end = try matchThenCopy(card, drive, "S")
+    #expect(end.verdict == .safe)
+    for rel in read.listing.files.map(\.relPath) { #expect(fm.fileExists(atPath: drive + "/S/" + rel), "\(rel)") }
+    let onDrive = Set(end.states.values.compactMap { s -> String? in if case .verified(let p, _, _) = s { p } else { nil } })
+    #expect(onDrive.count == 3, "one drive file answers for one card file")
+}
+
+/// A card with two identical files, and a job stopped with only one of them on the drive.
+private func twinsHalfCopied() throws -> (card: String, drive: String, read: CardRead, out: IngestOutcome) {
+    let card = temp(), drive = temp(), same = rnd(300_000)
+    put(card + "/A/INDEX.BDM", same); put(card + "/B/INDEX.BDM", same)
+    let read = CardReader.read(root: card, kind: kind), control = IngestControl()
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: control) { p in
+        if p.verifiedFiles >= 1 { control.stop() }
+    }
+    #expect(out.states.count == 1, "\(out.states)")
+    return (card, drive, read, out)
+}
+
+@Test func aFileNoRecordKnowsAnswersForOneTwinOnly() throws {
+    let (_, drive, read, _) = try twinsHalfCopied()
+    try fm.removeItem(atPath: drive + "/.ingest")
+    let states = CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: DriveIndex.scan(root: drive), driveRoot: drive)
+    let found = states.values.filter { if case .likely = $0 { true } else { false } }
+    #expect(found.count == 1, "\(states)")
+}
+
+@Test func aFileAlreadyProvedAnswersForOneTwinOnly() throws {
+    let (_, drive, read, out) = try twinsHalfCopied()
+    let states = CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: DriveIndex.scan(root: drive), driveRoot: drive, proved: out.proofs)
+    #expect(states.values.filter { $0 == .missing }.count == 1, "\(states)")
+}
+
+@Test func theSpaceCheckLeavesOutWhatsAlreadyThere() throws {
+    let drive = temp(), card = temp()
+    put(card + "/a.bin", rnd(1000))
+    let read = CardReader.read(root: card, kind: kind)
+    var job = makeJob(read, drive: drive, dest: "S")
+    job.items[0].file.size = 1 << 60
+    #expect(throws: IngestError.self) { try IngestEngine.preflight(job: job) }
+    put(drive + "/S/a.bin", rnd(1000))
+    try IngestEngine.preflight(job: job)
+}
+
+@Test func theNewestRecordOfACopyIsTheOneLookedAt() throws {
+    func entryOnADrive(oldName: String, newName: String) throws -> String? {
+        let drive = temp()
+        put(drive + "/Old/a.bin", rnd(1000)); put(drive + "/New/a.bin", rnd(1000))
+        for (job, year, path) in [(oldName, 1_000_000_000.0, "Old/a.bin"), (newName, 1_700_000_000.0, "New/a.bin")] {
+            let j = try Ledger(driveRoot: drive).open(LedgerHeader(job: job, started: Date(timeIntervalSince1970: year), cardName: "c", camera: nil, destination: "S", app: "t"))
+            try j.record(LedgerEntry(cardPath: "a.bin", drivePath: path, size: 1000, quick: "q", hash: "h", weak: nil))
+            j.close()
+        }
+        return Ledger(driveRoot: drive).entry(size: 1000, quick: "q")?.drivePath
+    }
+    // The file names say nothing, so both orders.
+    #expect(try entryOnADrive(oldName: "A", newName: "Z") == "New/a.bin")
+    #expect(try entryOnADrive(oldName: "Z", newName: "A") == "New/a.bin")
+}
+
+// Headers keep whole seconds, and a small card can go twice in one.
+@Test func twoJobsInOneSecondKeepTheirOrder() throws {
+    let drive = temp(), when = Date()
+    put(drive + "/Old/a.bin", rnd(1000)); put(drive + "/New/a.bin", rnd(1000))
+    for (job, path) in [("Z", "Old/a.bin"), ("A", "New/a.bin")] {
+        let j = try Ledger(driveRoot: drive).open(LedgerHeader(job: job, started: when, cardName: "c", camera: nil, destination: "S", app: "t"))
+        try j.record(LedgerEntry(cardPath: "a.bin", drivePath: path, size: 1000, quick: "q", hash: "h", weak: nil))
+        j.close()
+        usleep(20_000)
+    }
+    #expect(Ledger(driveRoot: drive).entry(size: 1000, quick: "q")?.drivePath == "New/a.bin")
+}
+
+@Test func aRefusedJobsUnrecordedNameIsWeakOnThisMountToo() throws {
+    let (_, drive, read) = oneFileCard()
+    let dying = Flag(), ledger = Ledger(driveRoot: drive)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: ledger, control: IngestControl(),
+                             hooks: FaultHooks(afterCopy: { _, _, _ in dying.on = true }, syncVolume: { _ in dying.on = false; return 1 }, journalFails: { dying.on })) { _ in }
+    #expect(ledger.isWeak(drivePath: "S/C0001.MP4"), "it needn't wait for the drive to come back")
+}
+
+@Test func aNameGivenBackIsntWeakWhenTheJobIsRefused() throws {
+    let drive = temp()
+    let ledger = Ledger(driveRoot: drive)
+    let journal = try ledger.open(LedgerHeader(job: "J", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    try journal.begin()
+    journal.intend(["S/theirs.bin", "S/mine.bin"])
+    journal.release("S/theirs.bin")
+    _ = journal.seal([], flushVolume: { 1 })
+    journal.close()
+    #expect(ledger.isWeak(drivePath: "S/mine.bin"))
+    #expect(!ledger.isWeak(drivePath: "S/theirs.bin"), "someone else got that name first")
+}
+
+@Test func aCutOffJobsNameIsOnlyClearedByAJobThatWantsIt() throws {
+    let drive = temp(), other = temp()
+    let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "CUT", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    try journal.begin()
+    journal.intend(["S/theirs.bin"])
+    journal.close()
+    put(drive + "/S/theirs.bin", Data())
+    put(other + "/Z.MP4", rnd(1000))
+    _ = try IngestEngine.run(job: makeJob(CardReader.read(root: other, kind: kind), drive: drive, dest: "T"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(fm.fileExists(atPath: drive + "/S/theirs.bin"), "an unrelated job has no reason to touch it")
+}
+
+@Test func aManifestNeverGoesThroughALink() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1000))
+    try fm.createDirectory(atPath: drive + "/S", withIntermediateDirectories: true)
+    #expect(symlink(card, drive + "/S/ascmhl") == 0)
+    let read = CardReader.read(root: card, kind: kind)
+    let job = makeJob(read, drive: drive, dest: "S")
+    let out = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(throws: IngestError.self) { try Pipeline.writeManifest(job: job, states: out.states, read: read) }
+    #expect(try fm.contentsOfDirectory(atPath: card) == ["C0001.MP4"], "rule 12")
+}
+
+@Test(arguments: [Data("<ascmhldirectory>cut short".utf8), Data([0xFF, 0xFE, 0x00])])
+func aChainItCantAppendToIsLeftAlone(chain: Data) throws {
+    let root = temp()
+    put(root + "/ascmhl/ascmhl_chain.xml", chain)
+    #expect(throws: IngestError.self) { try ASCMHL.write(root: root, rows: [ASCMHL.Row(path: "a", size: 1, mtime: 0, hash: "1")]) }
+    #expect(fm.contents(atPath: root + "/ascmhl/ascmhl_chain.xml") == chain, "someone's history")
+    #expect(try fm.contentsOfDirectory(atPath: root + "/ascmhl") == ["ascmhl_chain.xml"])
+}
+
+@Test func aJobThatCantListItsNamesTakesNone() throws {
+    let (_, drive, read) = oneFileCard()
+    let calls = Counter()
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                   hooks: FaultHooks(journalFails: { calls.next() == 1 })) { _ in }
+    guard case .failed? = out.states["C0001.MP4"] else { Issue.record("\(out.states)"); return }
+    #expect(!fm.fileExists(atPath: drive + "/S/C0001.MP4"), "a name goes on the list first")
+}
+
+@Test func aJobThatCantListItsNamesStillChecksWhatsThere() throws {
+    let (_, drive, read) = try oneFileCardCopied()
+    let calls = Counter()
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                   hooks: FaultHooks(journalFails: { calls.next() == 1 })) { _ in }
+    if case .verified? = out.states["C0001.MP4"] {} else { Issue.record("\(out.states)") }
+}
+
+@Test func aCloseThatDidntHappenLeavesNoStrongLine() throws {
+    let (card, drive, read) = oneFileCard()
+    try recordLost(card, drive)
+    let path = drive + "/S/C0001.MP4", bytes = fm.contents(atPath: path)!
+    let r = check(card, drive, read, flush: 0, hooks: FaultHooks(syncVolume: { _ in
+        try? fm.removeItem(atPath: path); put(path, bytes); return 0
+    }))
+    #expect(r.weak)
+    #expect(try !ledgerText(drive).contains("\"quick\""), "a strong line here would answer for that job's name")
+    #expect(check(card, drive, read, flush: nil).weak, "so a look still holds")
+}
+
+@Test func losingTheFirstLineDoesntLoseTheMarkBehindIt() throws {
+    let (_, drive, read) = try cutOffCopy(flush: 0)
+    try rewriteJournals(drive) { $0.split(separator: "\n").dropFirst().joined(separator: "\n") + "\n" }
+    #expect(!unfinished(Ledger(driveRoot: drive), read, "S/C0001.MP4").isEmpty)
+}
+
 // Nothing a person reads talks about flushes or caches.
 @Test func theWordsOnAHoldAreForAPerson() {
     let message = Pipeline.settle(issues: [], states: [:], weak: true, driveRoot: "/x")[0].message.lowercased()

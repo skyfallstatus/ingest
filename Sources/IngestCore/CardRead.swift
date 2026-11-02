@@ -7,6 +7,13 @@ public enum FileState: Hashable, Sendable {
     case failed(String)
 }
 
+extension FileState {
+    /// Why a file failed when a copy on the drive is what's wrong. That copy is still there.
+    public static let badCopy = "the copy on the drive doesn't match the card"
+    public static let nameTaken = "a different file already has that name on the drive"
+    public var isBadCopyOnDrive: Bool { if case .failed(let why) = self { why == Self.badCopy || why == Self.nameTaken } else { false } }
+}
+
 /// A file proved by reading both sides in full, and what both sides looked like then. Held in memory only, so quitting
 /// forgets it, and nothing found on a drive can make one. It only ever made a claim about this mount of this card and
 /// this mount of this drive, for this destination file, so it's checked against all of that each time it's used.

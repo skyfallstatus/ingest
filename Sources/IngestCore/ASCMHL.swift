@@ -46,9 +46,14 @@ enum ASCMHL {
     static func write(root: String, rows: [Row], now: Date = Date()) throws -> String {
         let folder = root + "/ascmhl"
         let fm = FileManager.default
+        var there = stat()                  // a link here could lead anywhere, even onto a card
+        if lstat(folder, &there) == 0, there.st_mode & S_IFMT != S_IFDIR { throw IngestError.driveNotWritable(root) }
         try fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
         let chainPath = folder + "/ascmhl_chain.xml"
-        let existingChain = fm.contents(atPath: chainPath).flatMap { String(data: $0, encoding: .utf8) }
+        let found = fm.contents(atPath: chainPath)
+        let existingChain = found.flatMap { String(data: $0, encoding: .utf8) }
+        // A chain this can't append to is someone's history all the same, so it's left as it is.
+        if found != nil, existingChain?.contains("</ascmhldirectory>") != true { throw IngestError.driveNotWritable(root) }
 
         var sequence = 1
         if let existingChain {

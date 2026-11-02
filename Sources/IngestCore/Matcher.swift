@@ -13,11 +13,17 @@ public enum CardMatcher {
         var out: [String: FileState] = [:]
         var cache: [String: String] = [:]   // drive path → fingerprint
         let root = ResolvedRoot(driveRoot)
+        var taken: Set<String> = []         // two files on a card with the same bytes are still two files
+        for f in read.listing.files {
+            if let quick = read.quick[f.relPath], let proof = proved[f.relPath], let root, proof.holds(for: f, quick: quick, on: root),
+               case .verified(let p, _, _) = proof.state { taken.insert(p) }
+        }
         for f in read.listing.files {
             guard let quick = read.quick[f.relPath] else { out[f.relPath] = .failed("won't open"); continue }
             if let proof = proved[f.relPath], let root, proof.holds(for: f, quick: quick, on: root) { out[f.relPath] = proof.state; continue }
-            if let e = ledger.entry(size: f.size, quick: quick) {
+            if let e = ledger.entry(size: f.size, quick: quick, notAt: taken) {
                 out[f.relPath] = .likely(drivePath: e.drivePath)
+                taken.insert(e.drivePath)
                 continue
             }
             guard let index else { out[f.relPath] = .missing; continue }
@@ -31,12 +37,13 @@ public enum CardMatcher {
             // Prefer a copy with the same trailing path: it's the one we'd want to point at.
             candidates.sort { sharedTail($0.path, f.relPath) > sharedTail($1.path, f.relPath) }
             var found: String?
-            for c in candidates.prefix(maxCandidates) {
+            for c in candidates.filter({ !taken.contains($0.path) }).prefix(maxCandidates) {
                 let fp: String?
                 if let hit = cache[c.path] { fp = hit }
                 else { fp = fingerprint(path: driveRoot + "/" + c.path).map(hexHash); cache[c.path] = fp }
                 if fp == quick { found = c.path; break }
             }
+            if let found { taken.insert(found) }
             out[f.relPath] = found.map { .likely(drivePath: $0) } ?? .missing
         }
         return out
@@ -49,10 +56,11 @@ public enum CardMatcher {
 
     /// Where earlier parts of this card already live, so the rest can join them.
     /// Returns the drive-relative folder that plays the role of the card root.
-    /// Only substantial files count: every card of a camera shares small marker files, which say nothing about which card this is.
-    public static func existingHome(states: [String: FileState], files: [CardFile]) -> String? {
+    /// Only substantial footage counts: every card of a camera shares marker files, some of them over a megabyte, which say
+    /// nothing about which card this is.
+    public static func existingHome(states: [String: FileState], files: [CardFile], kinds: Set<FileKind> = [.video, .audio, .still]) -> String? {
         var counts: [String: Int] = [:]
-        let sizes = Dictionary(files.map { ($0.relPath, $0.size) }, uniquingKeysWith: { a, _ in a })
+        let sizes = Dictionary(files.filter { kinds.contains($0.kind) }.map { ($0.relPath, $0.size) }, uniquingKeysWith: { a, _ in a })
         for (rel, s) in states where (sizes[rel] ?? 0) >= oneMiB {
             let drive: String
             switch s {

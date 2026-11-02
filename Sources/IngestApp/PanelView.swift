@@ -83,7 +83,24 @@ struct PanelView: View {
                     MaybeCardSheet(volume: m.volume, reason: m.reason, first: model.unreadable.isEmpty && m.volume.id == model.maybeCards.first?.volume.id)
                 }
                 ForEach(cards) { c in SheetView(card: c, first: model.unreadable.isEmpty && model.maybeCards.isEmpty && c === cards.first) }
+                UpdateLine()
             }
+        }
+    }
+}
+
+/// An update that's ready: one quiet line, and nothing happens until it's pressed.
+private struct UpdateLine: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let line = model.updates.readyLine {
+            HStack(spacing: 8) {
+                Text(line).font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Restart") { model.updates.restart() }.buttonStyle(ActionStyle(kind: .quiet, small: true))
+            }
+            .padding(.horizontal, Grid.side).padding(.vertical, 8)
         }
     }
 }

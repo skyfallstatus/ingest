@@ -13,6 +13,12 @@
     <key>CFBundleShortVersionString</key><string>__VERSION__</string>
     <key>CFBundleVersion</key><string>__BUILD__</string>
     <key>IngestBuild</key><string>__COMMIT__</string>
+    <key>SUFeedURL</key><string>__FEED__</string>
+    <key>SUPublicEDKey</key><string>c814kvd36Pw2kN2L1aKPKBNEhQYgEjlS++iikJsXupg=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUEnableSystemProfiling</key><false/>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.video</string>

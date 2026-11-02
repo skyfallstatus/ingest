@@ -2,6 +2,10 @@
 
 Thank you for trying this. Ingest copies a camera card to your drive, reads both sides back in full, and tells you when the card is safe to format. You're among the first people to use it on real work, which is the point, and also why this page exists.
 
+## Download
+
+Get **Ingest.dmg** from the [latest release](https://github.com/skyfallstatus/ingest/releases/latest), or [download it directly](https://github.com/skyfallstatus/ingest/releases/latest/download/Ingest.dmg).
+
 ## What to do
 
 1. Install it. The disk image has a file called **Read Me First** with these same steps.
@@ -30,11 +34,13 @@ If a card or the drive comes out, the proof ends. Put the card back in and it re
 
 If the menu bar says **Have a look**, the warning is on the read-back line and it doesn't clear, the drive refused to say it had finished writing, a copy couldn't be read fresh from the disk, or part of Ingest's own record on the drive can't be read. Check the footage plays, or copy the card to another drive. If it says empty folders aren't on the drive, every file is there: another tool copied the card and left them out, and some cameras need them. Press **Add 4 Folders** on the drive line, or **Add Folder** for one, and it goes to Safe. It adds only those folders. A hold on the clips, such as a missing RED part, comes from the card, so another drive won't clear that one.
 
+Ingest updates itself. Once a day it checks GitHub, downloads a new version quietly, and shows one line in the widget, with a **Restart** button. It never restarts by itself, and it won't while a card is being copied, read or checked. Until the app has a Developer ID, each update asks for the Allow prompt again: macOS treats every build as a new app, so say yes again when it asks to read removable volumes. Restarting ends a card's proof, like quitting does, so a card that's in is read again.
+
 Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 
 ## What to send back
 
-Use **Report a Bug** or **Suggest a Feature** in the `···` menu. **Open GitHub** copies your report and opens a blank page: paste it there and send it. Nothing you typed reaches GitHub until you do. If GitHub says the page can't be found, send what you copied to the person who gave you the app. New beta versions come from them too, so Check for Updates can't find them.
+Use **Report a Bug** or **Suggest a Feature** in the `···` menu. **Open GitHub** copies your report and opens a blank page: paste it there and send it. Nothing you typed reaches GitHub until you do.
 
 The most useful things to hear about:
 

@@ -233,6 +233,27 @@ private func freeMegabytes() throws -> Int {
     #expect(!FileManager.default.fileExists(atPath: scratch))
 }
 
+// Testers get the app from the repo's releases. Nobody hands it to them.
+@Test func theNotesSayWhereToDownloadIt() throws {
+    for rel in ["BETA.md", "README.md"] {
+        let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
+        #expect(text.contains("## Download"), "\(rel)")
+        #expect(text.contains("https://github.com/skyfallstatus/ingest/releases/latest"), "\(rel)")
+    }
+    for rel in ["BETA.md", "README.md", "Resources/dmg/Read Me First.txt", "Sources/IngestApp/Updates.swift", "Sources/IngestApp/Feedback.swift"] {
+        #expect(try !String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8).contains("gave you the app"), "\(rel)")
+    }
+}
+
+@Test func aReleaseOnlyEverGoesOutByHandAndAsOneFile() throws {
+    let script = try String(contentsOf: repo.appendingPathComponent("scripts/release.sh"), encoding: .utf8)
+    #expect(script.contains("gh release create $TAG dist/$DMG dist/appcast.xml"), "the image, and the feed that points at it")
+    #expect(script.contains("[[ $ANSWER == yes ]]"), "it asks first")
+    #expect(script.contains("(( DRY )) && exit 0"))
+    #expect(script.contains("repoURL"), "the repo comes from the one constant")
+    #expect(!script.contains("--visibility"), "it never changes who can see the repo")
+}
+
 // A look can't flush, so nothing may call it proof.
 @Test func theReadmeSaysALookIsWeakerThanTheApp() throws {
     let text = try String(contentsOf: repo.appendingPathComponent("README.md"), encoding: .utf8)

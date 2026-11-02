@@ -1209,6 +1209,7 @@ extension AppModelTests {
     @Test func `A job that was queued and stopped can't finish in the old folder either`() async throws {
         let w = Bench()
         let c = await w.safe()
+        await w.until("the look after the job") { !c.isMatching && !w.drive(w.driveA).isScanning }
         c.pendingDestination = Destination(footageRoot: "Rescue")
         c.destinationDrive = w.drive(w.driveA).volume.key
         c.phase = .ready

@@ -164,8 +164,9 @@ struct WidgetSpot: Equatable {
         if !out.isEmpty { out.append(.separator) }
         out += LibraryView.Page.allCases.map { p in .item(p == .settings ? "Settings…" : p.rawValue) { [weak self] in self?.show(p) } }
         out.append(.separator)
-        if case .available(let version) = model.updates.state {
-            out.append(.item("Update to \(version)…") { UpdateChecker.openReleasePage() })
+        if let ready = model.updates.readyLine {
+            out.append(.header(ready))
+            out.append(.item("Restart") { [weak self] in self?.model.updates.restart() })
         } else {
             out.append(.item("Check for Updates…") { [weak self] in self?.show(.settings); self?.model.updates.check() })
         }
@@ -218,7 +219,6 @@ struct WidgetSpot: Equatable {
         item.button?.highlight(true)
         if !model.unreadable.isEmpty { Task { await model.refresh() } }
         model.lookAgain()
-        if model.checksForUpdates, !model.isDemo { model.updates.checkIfDue() }
     }
 
     func show(_ page: LibraryView.Page) {

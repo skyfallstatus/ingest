@@ -55,12 +55,6 @@ final class Stores {
         set { d.set(newValue, forKey: "opensOnCardIn") }
     }
 
-    /// Off unless someone turns it on: it's the only reason the app would go online by itself.
-    var checksForUpdates: Bool {
-        get { d.bool(forKey: "checksForUpdates") }
-        set { d.set(newValue, forKey: "checksForUpdates") }
-    }
-
     var sawFirstRun: Bool {
         get { d.bool(forKey: "sawFirstRun") }
         set { d.set(newValue, forKey: "sawFirstRun") }

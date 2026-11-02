@@ -75,6 +75,10 @@ Copying and proving bytes works the same for any card. What changes by camera is
 
 macOS 14 or later, on Apple silicon or Intel. Only macOS 27 on Apple silicon has been tested so far: macOS 14, 15 and 26 are untested, and it has never run on an Intel Mac. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
 
+## Download
+
+Get **Ingest.dmg** from the [latest release](https://github.com/skyfallstatus/ingest/releases/latest), or [download it directly](https://github.com/skyfallstatus/ingest/releases/latest/download/Ingest.dmg). After that the app updates itself.
+
 ## Installing a beta
 
 Beta builds aren't notarised yet, because the project has no Apple Developer ID. macOS will refuse the first launch, and you only have to get past that once per build.
@@ -97,7 +101,7 @@ If the menu bar is full, macOS can hide the card icon. Open Ingest from Applicat
 
 ## Network
 
-The app makes one network call: asking GitHub for the latest release, when you click Check for Updates or if you turn on the automatic check in Settings, which is off by default. There's no tracking.
+Once a day the app asks GitHub for the update feed, and it sends nothing but that request: no account, no profile of your Mac, no tracking. **Update by itself** in Settings turns that off, and it's on by default. If there's a new version it downloads quietly, from GitHub, and the widget says so. Nothing installs until you press Restart, and that waits for any card being copied, read or checked. Updates are checked against a signature before anything installs.
 
 Report a Bug and Suggest a Feature put your report on the clipboard and open a blank GitHub page in your browser. Nothing you typed goes to GitHub unless you paste it there and send it. The report adds the app version, macOS version, Mac family and the camera maker if a card is in. It never adds paths, file names, client names, serials or drive names.
 

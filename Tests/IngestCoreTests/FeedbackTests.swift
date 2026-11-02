@@ -54,33 +54,3 @@ struct FeedbackTests {
         #expect(r.plainText.hasSuffix(r.details))
     }
 }
-
-@Suite("Update check")
-struct UpdateCheckTests {
-    private func reply(_ tag: String) -> Data { Data(#"{"tag_name":"\#(tag)","html_url":"https://evil.example/"}"#.utf8) }
-
-    @Test func `A newer tag is reported, in plain numbers`() {
-        #expect(UpdateCheck.read(status: 200, data: reply("v0.2"), current: "0.1") == .available("0.2"))
-        #expect(UpdateCheck.read(status: 200, data: reply("1.10.0"), current: "1.9.3") == .available("1.10.0"))
-        #expect(UpdateCheck.read(status: 200, data: reply("v0.2.0-beta.1"), current: "0.1") == .available("0.2.0"))
-    }
-
-    @Test func `The same or an older tag is up to date`() {
-        #expect(UpdateCheck.read(status: 200, data: reply("v0.1"), current: "0.1") == .upToDate)
-        #expect(UpdateCheck.read(status: 200, data: reply("0.1.0"), current: "0.1") == .upToDate)
-        #expect(UpdateCheck.read(status: 200, data: reply("v0.0.9"), current: "0.1") == .upToDate)
-    }
-
-    @Test func `A private repo's 404 is a failed check, never up to date`() {
-        #expect(UpdateCheck.read(status: 404, data: Data(#"{"message":"Not Found"}"#.utf8)) == .failed)
-        #expect(UpdateCheck.read(status: 200, data: Data("not json".utf8)) == .failed)
-        #expect(UpdateCheck.read(status: 200, data: Data("{}".utf8)) == .failed)
-        #expect(UpdateCheck.read(status: 200, data: reply("nightly")) == .failed)
-        #expect(UpdateCheck.read(status: 403, data: reply("v9.9")) == .failed)
-    }
-
-    @Test func `Both addresses come from the one repo URL, and only ever go to GitHub`() {
-        #expect(UpdateCheck.requestURL?.absoluteString == "https://api.github.com/repos/skyfallstatus/ingest/releases/latest")
-        #expect(UpdateCheck.releasePage?.absoluteString == AppInfo.repoURL + "/releases/latest")
-    }
-}

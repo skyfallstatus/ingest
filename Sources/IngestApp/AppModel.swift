@@ -151,7 +151,8 @@ import UserNotifications
 
     let stores = Stores()
     let loginItem = LoginItem()
-    let updates = UpdateChecker()
+    let updates = Updates()
+    init() { updates.busy = { [weak self] in self?.cardInTheWay } }
     private let watcher = VolumeWatcher()
     private var queue: [CardSession] = []
     private var queueRunning = false
@@ -170,7 +171,6 @@ import UserNotifications
     }
     var isDemo = false
     var opensOnCardIn = true { didSet { stores.opensOnCardIn = opensOnCardIn } }
-    var checksForUpdates = false { didSet { stores.checksForUpdates = checksForUpdates } }
     private(set) var hasVolumeChoices = false   // an "It's a Card" or "It's a Drive" there is to take back
     /// Something new needs a person: a card, or a volume that can't be decided alone.
     var onArrival: (@MainActor () -> Void)?
@@ -182,11 +182,21 @@ import UserNotifications
         hasVolumeChoices = !stores.overrides.isEmpty
         history = stores.history
         opensOnCardIn = stores.opensOnCardIn
-        checksForUpdates = stores.checksForUpdates
+        if !isDemo, Bundle.main.bundleIdentifier != nil { updates.start(SparkleEngine(updates: updates)) }
         cameraMemory = stores.cameras
         watcher.onChange = { [weak self] in Task { @MainActor in self?.scheduleRefresh() } }
         watcher.start()
         scheduleRefresh()
+    }
+
+    /// The card a restart would get in the way of: one being copied, read or checked.
+    var cardInTheWay: String? {
+        cards.first { c in
+            if c.isBusy || c.isMatching { return true }
+            if case .reading = c.phase { return true }
+            if case .checking = c.phase { return true }
+            return false
+        }?.name
     }
 
     /// Asked just after the first copy starts, so a new person doesn't meet a second system prompt at launch.

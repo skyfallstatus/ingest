@@ -4,11 +4,12 @@ import PackageDescription
 let package = Package(
     name: "ingest",
     platforms: [.macOS(.v14)],
+    dependencies: [.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1")],
     targets: [
         .target(name: "CIngest"),
         .target(name: "IngestCore", dependencies: ["CIngest"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "ingestctl", dependencies: ["IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
-        .executableTarget(name: "IngestApp", dependencies: ["IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
+        .executableTarget(name: "IngestApp", dependencies: ["IngestCore", .product(name: "Sparkle", package: "Sparkle")], swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(name: "IngestCoreTests", dependencies: ["IngestCore", "CIngest"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(name: "IngestAppTests", dependencies: ["IngestApp", "IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
     ]

@@ -26,4 +26,4 @@ Don't format a card on this beta's word alone without keeping another copy, unti
 
 Take a card or the drive out and the proof ends. Put the card back in and it's read in full again before it can say Safe.
 
-If something goes wrong, use Report a Bug in the ··· menu. Open GitHub copies your report and opens a blank page: paste it there and send it. If GitHub says the page can't be found, send what you copied to the person who gave you the app.
+If something goes wrong, use Report a Bug in the ··· menu. Open GitHub copies your report and opens a blank page: paste it there and send it.

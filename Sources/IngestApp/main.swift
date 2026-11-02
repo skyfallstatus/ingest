@@ -20,6 +20,9 @@ import IngestCore
             Windows.shared.bar?.showSetup(drive: model.drives.count == 1 ? model.drives[0] : nil)
         }
         Self.model.start()
+        #if UPDATE_TEST
+        UpdateEndToEnd.run(model: Self.model)
+        #endif
     }
 
     /// Never on screen in an accessory app, but it's what makes Cmd+Q, Cmd+W and text editing keys work.

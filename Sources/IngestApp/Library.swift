@@ -181,13 +181,14 @@ private struct SettingsPage: View {
 
     var body: some View {
         @Bindable var m = model
+        @Bindable var updates = model.updates
         VStack(alignment: .leading, spacing: 0) {
             PlainRow(title: "Open when a card goes in", subtitle: "Without taking the keyboard.") {
                 Toggle("Open when a card goes in", isOn: $m.opensOnCardIn).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             LoginRow(login: m.loginItem)
-            PlainRow(title: "Check for updates by itself", subtitle: "At most once a day. It only asks GitHub for the latest version.") {
-                Toggle("Check for updates by itself", isOn: $m.checksForUpdates).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            PlainRow(title: "Update by itself", subtitle: "Once a day it asks GitHub for the latest version, and sends nothing else. It never restarts without you.") {
+                Toggle("Update by itself", isOn: $updates.checksByItself).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             PlainRow(title: "Verification", subtitle: "XXH64, card and drive read in full")
             VersionRow(updates: m.updates)
@@ -222,12 +223,12 @@ private struct LoginRow: View {
 
 /// The version, and the quiet line about whether there's a newer one.
 private struct VersionRow: View {
-    let updates: UpdateChecker
+    let updates: Updates
 
     var body: some View {
         PlainRow(title: "Version \(AppInfo.fullVersion)", subtitle: updates.line) {
-            if case .available = updates.state {
-                Button("See Release") { UpdateChecker.openReleasePage() }.buttonStyle(ActionStyle(kind: .quiet, small: true))
+            if updates.readyLine != nil {
+                Button("Restart") { updates.restart() }.buttonStyle(ActionStyle(kind: .quiet, small: true))
             } else {
                 Button("Check for Updates") { updates.check() }
                     .buttonStyle(ActionStyle(kind: .quiet, small: true))

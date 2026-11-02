@@ -7,6 +7,11 @@ No footage is included in this repository.
 
 INCLUDED IN THIS REPOSITORY
 
+Sparkle
+  The app updates itself with Sparkle, which is embedded in the app.
+  Copyright (c) 2006-2013 Andy Matuschak and others. Licensed under the MIT License.
+  https://sparkle-project.org
+
 Netflix Open Content: "Sparks"
   An excerpt of the sidecar metadata file A005C006_160510NM01.xml is reproduced in
   Tests/IngestCoreTests/FormatsFieldSampleTests.swift.

@@ -51,7 +51,7 @@ struct FeedbackPage: View {
             }
             .padding(.horizontal, Grid.side).padding(.top, 6).padding(.bottom, 10)
             Foot(bottom: BottomLine(kind: .idle, title: copied ? "Copied" : "Send it",
-                                    sentence: "Open GitHub copies this and opens a blank page: paste it there and send it. Nothing goes until you do. If GitHub says page not found, send it to the person who gave you the app.")) {
+                                    sentence: "Open GitHub copies this and opens a blank page: paste it there and send it. Nothing goes until you do.")) {
                 HStack(spacing: 6) {
                     Button("Copy Details", action: copy).buttonStyle(ActionStyle(kind: .quiet))
                     Button("Open GitHub") {

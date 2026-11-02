@@ -37,7 +37,8 @@ func listing(_ root: String, depth: Int = 8, only names: ((String) -> Bool)? = n
 final class Fixture {
     let root: URL
     init(_ name: String = "fixture") {
-        root = URL(fileURLWithPath: "/tmp/ingest-formats-fixtures/\(name)-\(UUID().uuidString)")
+        let base = ProcessInfo.processInfo.environment["INGEST_TEST_SCRATCH"] ?? "/tmp"
+        root = URL(fileURLWithPath: "\(base)/ingest-formats-fixtures/\(name)-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     deinit { try? FileManager.default.removeItem(at: root) }

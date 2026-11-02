@@ -225,6 +225,20 @@ private func freeMegabytes() throws -> Int {
     #expect(try safety("exit 0", lock: lock).code == 0)
 }
 
+// A stopped test never reaches its own cleanup, so everything it makes has to be somewhere the run can clear. Under a real run,
+// where this test is, the tests' scratch has to be inside the run's folder.
+@Test func aTestsScratchIsInsideItsRun() throws {
+    guard let run = ProcessInfo.processInfo.environment["INGEST_TEST_SCRATCH"] else { return }
+    #expect(temp().hasPrefix(run + "/"), "\(temp())")
+    #expect(run.contains("ingest-test-run"))
+}
+
+@Test func aRunTellsItsTestsWhereTheirScratchGoes() throws {
+    let note = temp() + "/where"
+    #expect(try safety("echo $INGEST_TEST_SCRATCH > \(note)").code == 0)
+    #expect(try String(contentsOfFile: note, encoding: .utf8).contains("ingest-test-run"))
+}
+
 @Test func aRunsScratchGoesWithIt() throws {
     let note = temp() + "/where"
     #expect(try safety("echo $TMPDIR > \(note); echo x > $TMPDIR/left").code == 0)

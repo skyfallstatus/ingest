@@ -43,7 +43,7 @@ echo $$ > $LOCK/pid
 
 RUN=$(mktemp -d "${TMPDIR:-/tmp/}ingest-test-run.XXXXXX")
 touch $RUN/started
-export TMPDIR="$RUN/"
+export TMPDIR="$RUN/" INGEST_TEST_SCRATCH=$RUN
 
 F=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
 L=/Library/Developer/CommandLineTools/Library/Developer/usr/lib

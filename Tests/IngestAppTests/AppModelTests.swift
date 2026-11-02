@@ -6,7 +6,8 @@ import Testing
 
 /// Everything a run makes goes in one folder, and goes with the run. A suite leaves nothing on the Mac.
 private let scratch: String = {
-    let p = NSTemporaryDirectory() + "ingest-app-tests-" + UUID().uuidString
+    // scripts/test.sh says where, so stopping a run clears this too: a stopped test never reaches `atexit`.
+    let p = (ProcessInfo.processInfo.environment["INGEST_TEST_SCRATCH"] ?? NSTemporaryDirectory()) + "/ingest-app-tests-" + UUID().uuidString
     atexit { try? FileManager.default.removeItem(atPath: scratch) }
     return p
 }()

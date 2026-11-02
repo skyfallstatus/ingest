@@ -273,7 +273,8 @@ import SwiftUI
         watching.cancel()
         bar.hide()
         hdiutil(["detach", card.volume.path])
-        check("safe card out: the session goes", await until(20, "gone") { model.cards.isEmpty })
+        check("safe card out: the session goes", await until(20, "gone") { model.cards.isEmpty },
+              model.cards.map { "\($0.phase) gone \($0.volumeGone) to go \($0.filesToGo) matching \($0.isMatching): \($0.error ?? "no error")" }.joined(separator: "; "))
 
         // Back in. Proof doesn't survive a card leaving the Mac, however recently it was proved.
         sawCheck = false

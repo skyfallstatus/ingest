@@ -73,6 +73,7 @@ import UserNotifications
     var startedAt: Date?
     var destinationPath: String?        // drive-relative, where this card went
     var pendingDestination: Destination?
+    var copiedWhole = false             // the job going there ended with every file proved, whatever a later look can't re-read
     var extraFolders: [String] = []
     var isMatching = false
     var proved: [String: Proof] = [:]   // read in full on both sides, while this card and `provedOn` have stayed in
@@ -241,9 +242,10 @@ import UserNotifications
         // One already marked stays too, whatever its job has done since, until the card is back or someone dismisses it.
         for c in cards where !stillHere(c.volume) && !c.ejected && !c.volumeGone {
             // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too, and
-            // so does one already being read again, because losing the card is what took its proof.
+            // so does one already being read again, because losing the card is what took its proof. A job that ended whole owes
+            // nothing, and a look that can't read a card that has gone doesn't change that.
             let settling = switch c.phase { case .ready, .reading, .checking: true; case .stopped: c.driveWentAway; default: false }
-            let cutShort = settling && c.pendingDestination != nil && c.filesToGo > 0
+            let cutShort = settling && c.pendingDestination != nil && c.filesToGo > 0 && !c.copiedWhole
             if c.phase == .copying || cutShort {
                 let pulled = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
                 c.error = pulled
@@ -621,6 +623,7 @@ import UserNotifications
             if destination.footageRoot != c.pendingDestination?.footageRoot { c.badCopyNote = badCopySentence(c, leaving: destination) }
             for (rel, state) in c.states { if case .failed = state { c.states[rel] = .missing } }     // this job says what becomes of them
             c.pendingDestination = destination
+            c.copiedWhole = false
             c.destinationDrive = drive.volume.key
             c.extraFolders = extraFolders
             c.destinationPath = destination.footageRoot
@@ -793,6 +796,7 @@ import UserNotifications
             c.existingHome = CardMatcher.existingHome(states: done.states, files: read.listing.files)
             let driveGone = !drive.isCurrent
             if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
+            c.copiedWhole = !out.cancelled && !driveGone && c.filesToGo == 0
             if out.cancelled || driveGone { c.phase = .stopped }
             else if c.isSafe || c.isHold { c.phase = .finished }
             else { c.phase = .ready }

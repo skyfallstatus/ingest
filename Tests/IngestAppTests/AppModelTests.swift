@@ -536,6 +536,7 @@ extension AppModelTests {
         let c = await w.ready()
         w.model.start(c, destination: Destination(footageRoot: "S"))
         await w.until("the job") { !c.isBusy && c.pendingDestination != nil && (c.phase == .finished || c.phase == .ready) && !c.isMatching }
+        c.copiedWhole = false       // this job was cut short. One that ended whole has a test of its own
         for phase in [CardSession.Phase.checking(done: 0, total: 1), .reading(done: 0, total: 0)] {
             c.phase = phase
             c.states["one.bin"] = .missing
@@ -1229,6 +1230,29 @@ extension AppModelTests {
         c.destinationDrive = w.drive(w.driveA).volume.key
         w.model.use(drive: w.drive(w.driveB))
         await w.until("Safe on the other drive") { c.isSafe(on: w.model.workingDrive) }
+    }
+
+    // Seen on a real run: a look was going when the card left, it couldn't read the card, and that took the proof, so a card with every
+    // file on the drive said it came out before they were copied.
+    @Test func `A Safe card that leaves during a look just goes, with nothing untrue said`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the look after the job") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        c.proved = [:]
+        for rel in c.states.keys { c.states[rel] = .missing }
+        c.phase = .reading(done: 0, total: 0)
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        #expect(w.model.cards.isEmpty, "\(w.model.cards.map { $0.error ?? "\($0.phase)" })")
+    }
+
+    @Test func `A job that started again can be cut short again`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the look after the job") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        #expect(c.copiedWhole)
+        w.model.start(c, destination: Destination(footageRoot: "Rescue"))
+        #expect(!c.copiedWhole, "this one hasn't finished")
     }
 
     @Test func `Safe on another drive names the folder on that drive`() async throws {

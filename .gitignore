@@ -1,0 +1,7 @@
+.build/
+dist/
+Tests/IngestCoreTests/Local/
+docs/design/
+.DS_Store
+*.dmg
+*.sparseimage

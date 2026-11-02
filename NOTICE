@@ -1,0 +1,61 @@
+Ingest
+All rights reserved during private beta.
+
+This file credits material from others that this project includes or was checked against.
+No footage is included in this repository.
+
+
+INCLUDED IN THIS REPOSITORY
+
+Netflix Open Content: "Sparks"
+  An excerpt of the sidecar metadata file A005C006_160510NM01.xml is reproduced in
+  Tests/IngestCoreTests/FormatsFieldSampleTests.swift.
+  © Netflix, Inc.
+  Licensed under the Creative Commons Attribution 4.0 International Public License.
+  https://creativecommons.org/licenses/by/4.0/legalcode
+  Source: https://opencontent.netflix.com/
+
+xxHash test vectors
+  EngineTests.swift generates the sanity buffer from xxHash's own test suite and checks
+  the published XXH64 results. The XXH64 code in Sources/CIngest/xxh64.c was written from
+  the public specification and contains no xxHash code.
+  https://github.com/Cyan4973/xxHash
+
+
+CHECKED AGAINST, NOT INCLUDED
+
+These files aren't in this repository, and none of their content is reproduced beyond
+short technical facts, such as a tag name or a model string. A few tests read them if
+they're present on your machine, and skip if they aren't.
+
+FFmpeg sample files: F099_C001_0317IH.R3D
+  https://samples.ffmpeg.org/r3d/
+  No licence is stated for this file. It's used as a test input only and isn't redistributed.
+
+Blackmagic RAW: profile.braw
+  Installed with Blackmagic RAW Speed Test. Read from the installed application only.
+
+raw.pixls.us
+  Sample stills, used to test identification. Released by their uploaders under CC0.
+  https://raw.pixls.us/
+
+GoPro gpmf-parser sample clips
+  Apache License 2.0 or MIT, at your option.
+  https://github.com/gopro/gpmf-parser
+
+ARRI sample footage
+  https://www.arri.com/samplefootage
+  Published for workflow evaluation. No licence is stated for redistribution, so nothing
+  from these files is redistributed here.
+
+Blackmagic Design gallery clips
+  https://www.blackmagicdesign.com/
+  Public downloads. Nothing from these files is redistributed here.
+
+ExifTool
+  Read as a reference for metadata layouts. No ExifTool code is included.
+  https://exiftool.org/
+
+
+Product and company names are trademarks of their owners and are used only to say which
+cameras and formats the app works with. This project has no connection with any of them.

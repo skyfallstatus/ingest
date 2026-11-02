@@ -161,6 +161,54 @@ private func freeMegabytes() throws -> Int {
     #expect(kill(child, 0) != 0, "what it started has gone too")
 }
 
+/// A process that's been killed stays visible until launchd has taken it away, so this gives it a moment.
+private func gone(_ pid: Int32) -> Bool {
+    for _ in 0..<60 {
+        if kill(pid, 0) != 0 { return true }
+        usleep(50_000)
+    }
+    return false
+}
+
+private func pidIn(_ file: String) -> Int32? {
+    (try? String(contentsOfFile: file, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+}
+
+/// A child in a process group of its own, which ignores the polite signal, under a parent that goes at the first one. That's how
+/// `swift test` looks from outside: its test process leaves the group, and once the parent has gone nothing leads to the child.
+/// It lets go of the run's output, or waiting for that output would wait for the child and hide that it was left running.
+private func aChildThatLeftTheGroup(pidFile: String) -> String {
+    "perl -e 'my $p=fork(); if(!$p){ setpgrp(0,0); $SIG{TERM}=q(IGNORE); open(STDOUT,q(>/dev/null)); open(STDERR,q(>/dev/null)); open(F,q(>\(pidFile))); print F $$; close F; sleep 30; exit } $SIG{TERM}=sub{exit}; sleep 30'"
+}
+
+@Test func aStoppedRunTakesAChildThatLeftItsGroup() throws {
+    let pid = temp() + "/pid"
+    let r = try safety(aChildThatLeftTheGroup(pidFile: pid), env: ["INGEST_TEST_SECONDS": "2"])
+    #expect(r.code == 98, "\(r.said)")
+    let child = try #require(pidIn(pid))
+    #expect(gone(child), "it's still running after the run said it stopped")
+}
+
+// With nothing watching, the time limit and the disk checks are gone and the next run starts beside this one.
+@Test func killingTheWatchdogStopsTheRun() throws {
+    let folder = temp(), pid = folder + "/pid", lock = folder + "/lock"
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    p.arguments = [repo.appendingPathComponent("scripts/test.sh").path]
+    p.environment = ProcessInfo.processInfo.environment.merging(
+        ["INGEST_TEST_COMMAND": aChildThatLeftTheGroup(pidFile: pid), "INGEST_TEST_LOCK": lock, "INGEST_TEST_START_MB": "1", "INGEST_TEST_FLOOR_MB": "1", "INGEST_TEST_DROP_MB": "99999999"]) { _, new in new }
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    for _ in 0..<200 where pidIn(pid) == nil { usleep(50_000) }
+    let child = try #require(pidIn(pid))
+    kill(p.processIdentifier, SIGKILL)
+    p.waitUntilExit()
+    #expect(gone(child), "the run carried on with nothing watching it")
+    for _ in 0..<60 where FileManager.default.fileExists(atPath: lock) { usleep(50_000) }
+    #expect(!FileManager.default.fileExists(atPath: lock), "and the next run can start")
+}
+
 @Test func theTimeLimitIsTwentyMinutesUnlessSomeoneSays() throws {
     let script = try String(contentsOf: repo.appendingPathComponent("scripts/test.sh"), encoding: .utf8)
     #expect(script.contains("LIMIT=$(( ${INGEST_TEST_MINUTES:-20} * 60 ))"))
@@ -189,7 +237,9 @@ private func freeMegabytes() throws -> Int {
     let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     list.waitUntilExit()
     let count = text.split(separator: "\n").filter { Int($0.trimmingCharacters(in: .whitespaces)) == Int(mine) }.count
-    let eat = "perl -e 'for(1..200){ my $p=fork(); last unless defined $p; if(!$p){open(F,\">>\(pids)\");print F \"$$\\n\";close F;sleep 20;exit} } sleep 20'"
+    // One leaves the group first, and the watchdog gets a pass to see it. When forks fail, nothing can look it up any more.
+    let left = temp() + "/left"
+    let eat = "perl -e 'if(!fork()){ setpgrp(0,0); open(STDOUT,q(>/dev/null)); open(STDERR,q(>/dev/null)); open(F,\">\(left)\");print F $$;close F; sleep 20; exit } sleep 2; for(1..1000){ my $p=fork(); last unless defined $p; if(!$p){open(F,\">>\(pids)\");print F \"$$\\n\";close F;sleep 20;exit} } sleep 20'"
     let p = Process(), said = Pipe()
     p.executableURL = URL(fileURLWithPath: "/bin/zsh")
     p.arguments = ["-c", "ulimit -u \(count + 40); exec zsh \(script)"]
@@ -204,8 +254,9 @@ private func freeMegabytes() throws -> Int {
     #expect(words.contains("couldn't be started"), "\(words)")
     #expect(!FileManager.default.fileExists(atPath: lock), "it cleared up, on no new processes")
     for line in (try? String(contentsOfFile: pids, encoding: .utf8))?.split(separator: "\n") ?? [] {
-        #expect(kill(Int32(line)!, 0) != 0, "nothing it started is left")
+        #expect(gone(Int32(line)!), "nothing it started is left")
     }
+    #expect(gone(try #require(pidIn(left))), "not even what had left its group")
 }
 
 @Test func oneRunGoesAtATime() throws {

@@ -1,6 +1,7 @@
 import Foundation
 
-/// A bug report or a suggestion, ready for a person to read before sending. Beyond what they typed it carries versions
+/// A bug report or a suggestion, ready for a person to read before sending. It leaves the Mac only when they paste it
+/// somewhere and send it themselves. Beyond what they typed it carries versions
 /// and words from closed lists, so a path, a file name, a client, a serial or a drive name has no way in.
 public struct FeedbackReport: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
@@ -48,34 +49,12 @@ public struct FeedbackReport: Equatable, Sendable {
     /// For Copy Details: everything, however long.
     public var plainText: String { "\(kind.title)\n\n" + body(message) }
 
-    private var title: String {
-        let first = message.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        return String(first.trimmingCharacters(in: .whitespaces).prefix(70))
-    }
-
-    private func address(_ text: String) -> URL? {
-        guard var parts = URLComponents(string: AppInfo.repoURL + "/issues/new") else { return nil }
-        parts.queryItems = [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body(text)),
-                            URLQueryItem(name: "labels", value: kind.label)]
-        // A plus in a query reads as a space, and URLComponents leaves it bare.
-        let query = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
-        parts.percentEncodedQuery = query
-        return parts.url
-    }
-
-    /// The most a browser and GitHub reliably take in one address.
-    static let longestAddress = 7_000
-
-    /// A new issue on GitHub, filled in. A very long message is cut to fit, and says so. Copy Details has all of it.
+    /// A blank issue on GitHub. Whatever goes in an address reaches GitHub the moment the page opens, even a page that says
+    /// not found, and stays in the browser's history, so nothing typed goes in it. A person pastes `plainText` and sends that.
     public var issueURL: URL? {
-        if let url = address(message), url.absoluteString.count <= Self.longestAddress { return url }
-        var text = message
-        while !text.isEmpty {
-            text = String(text.dropLast(max(text.count / 10, 1)))
-            if let url = address(text + "\n\n(Cut short to fit. Copy Details has all of it.)"),
-               url.absoluteString.count <= Self.longestAddress { return url }
-        }
-        return address("")
+        guard var parts = URLComponents(string: AppInfo.repoURL + "/issues/new") else { return nil }
+        parts.queryItems = [URLQueryItem(name: "labels", value: kind.label)]
+        return parts.url
     }
 }
 

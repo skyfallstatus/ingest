@@ -2,8 +2,8 @@ import AppKit
 import IngestCore
 import SwiftUI
 
-/// Writing a bug report or a suggestion, as a page of the widget. Nothing leaves until a person sends it from their
-/// browser or pastes it somewhere, and they can read everything that goes with it first.
+/// Writing a bug report or a suggestion, as a page of the widget. Open GitHub puts it on the clipboard and opens a blank
+/// page, so nothing leaves until a person pastes it there and sends it, and they can read all that goes with it first.
 struct FeedbackPage: View {
     @Environment(AppModel.self) private var model
     @Environment(PanelUI.self) private var ui
@@ -51,19 +51,23 @@ struct FeedbackPage: View {
             }
             .padding(.horizontal, Grid.side).padding(.top, 6).padding(.bottom, 10)
             Foot(bottom: BottomLine(kind: .idle, title: copied ? "Copied" : "Send it",
-                                    sentence: "Opens on GitHub, ready to send. If GitHub says page not found, use Copy Details and send it to the person who gave you the app.")) {
+                                    sentence: "Open GitHub copies this and opens a blank page: paste it there and send it. Nothing goes until you do. If GitHub says page not found, send it to the person who gave you the app.")) {
                 HStack(spacing: 6) {
-                    Button("Copy Details") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(report.plainText, forType: .string)
-                        copied = true
+                    Button("Copy Details", action: copy).buttonStyle(ActionStyle(kind: .quiet))
+                    Button("Open GitHub") {
+                        copy()
+                        if let url = report.issueURL { NSWorkspace.shared.open(url) }
                     }
-                    .buttonStyle(ActionStyle(kind: .quiet))
-                    Button("Open GitHub") { if let url = report.issueURL { NSWorkspace.shared.open(url) } }
-                        .buttonStyle(ActionStyle())
+                    .buttonStyle(ActionStyle())
                 }
             }
         }
         .onAppear { typing = true }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report.plainText, forType: .string)
+        copied = true
     }
 }

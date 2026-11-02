@@ -9,11 +9,6 @@ private func report(_ kind: FeedbackReport.Kind = .bug, _ message: String = "", 
     FeedbackReport(kind: kind, message: message, system: macOS, hardwareModel: model, appleSilicon: true, cameras: cameras)
 }
 
-private func query(_ url: URL?) -> [String: String] {
-    let items = url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
-    return Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
-}
-
 @Suite("Feedback")
 struct FeedbackTests {
     @Test func `The details say the version, the Mac and the camera maker, and that is all`() {
@@ -37,39 +32,26 @@ struct FeedbackTests {
         #expect(FeedbackReport.family(ofModel: "7,3") == "Mac")
     }
 
-    @Test func `Nothing but the typed message and the details goes in the address`() throws {
-        let r = report(.bug, "It stopped halfway", cameras: [.red])
-        let q = query(r.issueURL)
-        #expect(Set(q.keys) == ["title", "body", "labels"])
-        #expect(q["title"] == "It stopped halfway")
-        #expect(q["body"] == "It stopped halfway\n\n---\n" + r.details)
-        #expect(q["labels"] == "bug")
+    @Test func `Nothing typed goes in the address, because an address reaches GitHub the moment it opens`() throws {
+        let typed = "Client Example /Volumes/EXAMPLE/Client/clip.mov"
+        let r = report(.bug, typed, cameras: [.red])
         let url = try #require(r.issueURL?.absoluteString)
-        #expect(url.hasPrefix(AppInfo.repoURL + "/issues/new?"))
+        #expect(url == AppInfo.repoURL + "/issues/new?labels=bug")
+        #expect(report(.feature).issueURL?.absoluteString == AppInfo.repoURL + "/issues/new?labels=enhancement")
     }
 
-    @Test func `An empty report still opens, with the question in it`() {
-        let q = query(report(.feature).issueURL)
-        #expect(q["title"] == "")
-        #expect(q["body"]?.hasPrefix(FeedbackReport.Kind.feature.prompt) == true)
-        #expect(q["labels"] == "enhancement")
-    }
-
-    @Test func `A plus, an ampersand and a newline survive the address`() {
-        let q = query(report(.bug, "a+b & c\nd").issueURL)
-        #expect(q["body"]?.hasPrefix("a+b & c\nd\n\n---") == true)
-        #expect(q["title"] == "a+b & c")
-    }
-
-    @Test func `A very long message is cut to fit, says so, and keeps the details`() throws {
+    @Test func `What gets pasted is the whole report, however long, with the details at the end`() {
         let long = String(repeating: "Ünïcödé text ", count: 3000)
-        let r = report(.bug, long)
-        let url = try #require(r.issueURL)
-        #expect(url.absoluteString.count <= FeedbackReport.longestAddress)
-        let body = try #require(query(url)["body"])
-        #expect(body.contains("Cut short"))
-        #expect(body.hasSuffix(r.details))
+        let r = report(.bug, long, cameras: [.red])
+        #expect(r.plainText.hasPrefix(FeedbackReport.Kind.bug.title))
         #expect(r.plainText.contains(long.trimmingCharacters(in: .whitespaces)))
+        #expect(r.plainText.hasSuffix(r.details))
+    }
+
+    @Test func `An empty report still has the question and the details`() {
+        let r = report(.feature)
+        #expect(r.plainText.contains(FeedbackReport.Kind.feature.prompt))
+        #expect(r.plainText.hasSuffix(r.details))
     }
 }
 

@@ -15,7 +15,7 @@ import IngestCore
         case .checking: "Checking…"
         case .upToDate: "This is the latest version."
         case .available(let version): "\(AppInfo.name) \(version) is out."
-        case .failed: "Couldn't check for updates."
+        case .failed: "Couldn't check. During the beta, new versions come from the person who gave you the app."
         }
     }
 

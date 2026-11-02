@@ -16,7 +16,7 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 }
 
 /// Where the widget hangs: a screen, the widget's right edge and its top. Worked out once when it opens, then held, because
-/// macOS moves a status item's window to whichever display the pointer is on, up to a second later, open widget or not.
+/// macOS moves a status item's window to whichever display the pointer is on, up to a few seconds later, open widget or not.
 struct WidgetSpot: Equatable {
     struct Screen: Equatable { var frame: CGRect; var visible: CGRect }
     var screen: Screen

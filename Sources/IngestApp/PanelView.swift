@@ -178,12 +178,12 @@ private struct LineDetail: View {
         case .chooseFolder: Windows.shared.chooseFolder(card: card, model: model)
         case .showInFinder(let rel): model.reveal(rel, of: card)
         case .notACard: model.forgetChoice(for: card.volume)
-        case .useDrive(let name):
-            guard let d = model.drives.first(where: { $0.name == name }) else { return }
+        case .useDrive(let id, _):
+            guard let d = model.drives.first(where: { $0.id == id }) else { return }
             model.use(drive: d)
             if d.setup == nil { ui.setup = SetupRequest(drive: d) }
-        case .setUpDrive(let name):
-            if let d = model.drives.first(where: { $0.name == name }) { ui.setup = SetupRequest(drive: d) }
+        case .setUpDrive(let id, _):
+            if let d = model.drives.first(where: { $0.id == id }) { ui.setup = SetupRequest(drive: d) }
         }
     }
 }
@@ -319,7 +319,7 @@ private struct UnreadableSheet: View {
 
     var body: some View {
         VolumeSheet(volume: volume, first: first, line: SheetLine(id: .card, mark: .failed, label: "Can't read \(volume.name)"),
-                    words: "\(AppInfo.name) isn't allowed to read it. Allow it in System Settings › Privacy & Security › Files & Folders.",
+                    words: "\(AppInfo.name) couldn't open it. If it isn't allowed to, allow it in System Settings › Privacy & Security › Files & Folders.",
                     bottom: BottomLine(kind: .failed, title: "Don't format", sentence: "\(volume.name) can't be read.")) {
             Button("Open Settings") {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders") { NSWorkspace.shared.open(url) }

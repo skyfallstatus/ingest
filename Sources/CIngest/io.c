@@ -20,6 +20,13 @@
 #define OVERLAP_MIN (16u * 1024 * 1024)     // below this, threads gain nothing
 #define BUF_ALIGN 16384
 
+static const char *_Atomic fault_no_map, *_Atomic fault_bad_dir;
+static void (*_Atomic fault_reserved)(const char *);
+
+void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserved)(const char *)) {
+    fault_no_map = no_map; fault_bad_dir = bad_dir; fault_reserved = reserved;
+}
+
 static ci_result fail(int stage, int err) { ci_result r; memset(&r, 0, sizeof r); r.stage = stage; r.err = err; return r; }
 
 // ---- Reading a file ahead ----
@@ -195,26 +202,34 @@ ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint, void *ca
     return r;
 }
 
-ci_result ci_hash_uncached(const char *path, void *cancel_, int *invalidated, void *progress_) {
+static void stamp_of(const struct stat *st, ci_stamp *out) {
+    out->dev = st->st_dev;
+    out->ino = st->st_ino;
+    out->size = (uint64_t)st->st_size;
+    out->mtime = st->st_mtimespec.tv_sec;
+    out->mtime_ns = st->st_mtimespec.tv_nsec;
+}
+
+ci_result ci_hash_file(const char *path, int nofollow, void *cancel_, int *invalidated, void *progress_) {
     _Atomic int *cancel = cancel_;
     _Atomic uint64_t *progress = progress_;
     if (invalidated) *invalidated = 0;
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | (nofollow ? O_NOFOLLOW_ANY : 0));
     if (fd < 0) return fail(CI_STAGE_OPEN_SRC, errno);
     struct stat st;
     if (fstat(fd, &st) != 0) { int e = errno; close(fd); return fail(CI_STAGE_READ, e); }
 
-    if (st.st_size == 0) {
-        if (invalidated) *invalidated = 1;  // nothing cached can be misleading
-    } else {
-        void *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    int cleared = st.st_size == 0;          // nothing cached can be misleading
+    if (st.st_size != 0) {
+        const char *broken = fault_no_map;
+        void *map = broken && strstr(path, broken) ? MAP_FAILED : mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0);
         if (map != MAP_FAILED) {
-            if (msync(map, (size_t)st.st_size, MS_INVALIDATE) == 0 && invalidated) *invalidated = 1;
+            cleared = msync(map, (size_t)st.st_size, MS_INVALIDATE) == 0;
             munmap(map, (size_t)st.st_size);
         }
     }
-    fcntl(fd, F_NOCACHE, 1);
-    fcntl(fd, F_RDAHEAD, 0);
+    // Without these the read can come from the cache whatever the invalidation did.
+    if (fcntl(fd, F_NOCACHE, 1) != 0 || fcntl(fd, F_RDAHEAD, 0) != 0) cleared = 0;
 
     reader g;
     int e = reader_open(&g, fd, CHECK_CHUNK, (uint64_t)st.st_size);
@@ -234,8 +249,24 @@ ci_result ci_hash_uncached(const char *path, void *cancel_, int *invalidated, vo
     }
     reader_close(&g);
     r.hash = ci_xxh64_final(&x);
+
+    struct stat now;
+    if (r.stage == 0 && fstat(fd, &now) != 0) { r.stage = CI_STAGE_READ; r.err = errno; }
+    if (r.stage == 0 && st.st_size != 0) {  // a size of 0 can't be trusted: virtual volumes report it for real files
+        int whole = r.bytes == (uint64_t)st.st_size;
+        int same = now.st_dev == st.st_dev && now.st_ino == st.st_ino && now.st_size == st.st_size
+            && now.st_mtimespec.tv_sec == st.st_mtimespec.tv_sec && now.st_mtimespec.tv_nsec == st.st_mtimespec.tv_nsec;
+        if (!whole || !same) { r.stage = CI_STAGE_READ; r.err = whole ? ESTALE : EIO; }
+    }
+    if (r.stage == 0) stamp_of(&now, &r.stamp);
+    // Bytes behind a listed size of 0 were never in a mapping, so nothing cleared them.
+    if (invalidated) *invalidated = cleared && !(st.st_size == 0 && r.bytes != 0);
     close(fd);
     return r;
+}
+
+ci_result ci_hash_uncached(const char *path, void *cancel, int *invalidated, void *progress) {
+    return ci_hash_file(path, 0, cancel, invalidated, progress);
 }
 
 #define QUICK (64u * 1024)
@@ -332,9 +363,12 @@ static void strict_dir(strict_walk *w, const char *path, int depth) {
     DIR *d = opendir(path);
     if (!d) { strict_error(w, path, depth, errno); return; }
     size_t base = strlen(path);
+    int seen = 0;
     for (;;) {
         errno = 0;
         struct dirent *de = readdir(d);
+        const char *broken = fault_bad_dir;
+        if (de && broken && strstr(path, broken) && ++seen > 1) { de = NULL; errno = EIO; }
         if (!de) {
             // NULL means the end only when errno stayed 0. Anything else is a short listing.
             if (errno != 0) strict_error(w, path, depth, errno);
@@ -369,16 +403,49 @@ void ci_walk_strict(const char *root, ci_walk_cb cb, void *ctx) {
     strict_dir(&w, root, 0);
 }
 
-// FSKit exFAT answers RENAME_EXCL with EEXIST when the target exists, but ENOTSUP when it doesn't.
-// So on ENOTSUP the target was absent a moment ago: confirm that, then do a plain rename.
+// RENAME_EXCL takes a name atomically where it works. FSKit exFAT answers it with EEXIST when the target exists but
+// ENOTSUP when it doesn't, and has no hard links and no RENAME_SWAP. So there the name is reserved first: O_EXCL makes
+// an empty file, atomically on every filesystem, and whatever was already there, or gets there first, keeps the name.
+// The rename then replaces only that reservation. The one thing left is a writer that doesn't use O_EXCL opening the
+// reservation between the size check and the rename: it writes over any name it's given, without looking.
 int ci_rename_excl(const char *from, const char *to) {
     if (renamex_np(from, to, RENAME_EXCL) == 0) return 0;
     int e = errno;
     if (e != ENOTSUP && e != EINVAL) return e;
+    int fd = open(to, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW_ANY, 0644);
+    if (fd < 0) return errno;
+    if (fault_reserved) fault_reserved(to);
     struct stat st;
-    if (lstat(to, &st) == 0) return EEXIST;
-    if (errno != ENOENT) return errno;
-    return rename(from, to) == 0 ? 0 : errno;
+    int rc = fstat(fd, &st) != 0 ? errno : st.st_size != 0 ? EEXIST : 0;
+    close(fd);
+    if (rc == EEXIST) return rc;                // no longer empty, so no longer ours
+    if (rc == 0 && rename(from, to) == 0) return 0;
+    if (rc == 0) rc = errno;
+    unlink(to);
+    return rc;
+}
+
+int ci_stamp_file(const char *path, ci_stamp *out) {
+    struct stat st;
+    if (fstatat(AT_FDCWD, path, &st, AT_SYMLINK_NOFOLLOW_ANY) != 0) return errno;
+    if (!S_ISREG(st.st_mode)) return EFTYPE;
+    stamp_of(&st, out);
+    return 0;
+}
+
+int ci_plain_dir(const char *path) {
+    struct stat st;
+    if (fstatat(AT_FDCWD, path, &st, AT_SYMLINK_NOFOLLOW_ANY) != 0) return errno;
+    return S_ISDIR(st.st_mode) ? 0 : ENOTDIR;
+}
+
+// O_EVTONLY is what Finder watches a volume with: it doesn't stop an eject, and an unmount revokes it for good, so a
+// remount of the same card at the same path can't bring it back.
+int ci_mount_open(const char *path) { return open(path, O_EVTONLY); }
+
+int ci_mount_alive(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0;
 }
 
 int ci_fsync_dir(const char *dir) {

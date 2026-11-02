@@ -16,6 +16,7 @@ public struct IngestJob: Sendable {
     public var destination: String          // drive-relative root of the card tree
     public var dirsToCreate: [String]       // drive-relative, including the card's own empty folders
     public var items: [IngestItem]          // only the files that still need copying
+    public var cardMount: MountAnchor?      // the mount the card was read from
 }
 
 public struct IngestProgress: Sendable {
@@ -35,6 +36,7 @@ public struct IngestProgress: Sendable {
 
 public struct IngestOutcome: Sendable {
     public var states: [String: FileState]
+    public var proofs: [String: Proof]  // what `states` calls verified, tied to the files and mounts it read
     public var cancelled: Bool
     public var weakVerification: Bool   // the drive wouldn't confirm a flush, or the cache couldn't be bypassed
     public var failures: [String] { states.compactMap { if case .failed = $0.value { $0.key } else { nil } } }
@@ -44,8 +46,10 @@ public struct IngestOutcome: Sendable {
 public struct FaultHooks: Sendable {
     public var afterCopy: (@Sendable (_ tempPath: String, _ sourcePath: String, _ attempt: Int) -> Void)?
     public var syncVolume: (@Sendable (_ driveRoot: String) -> Int32)?
-    public init(afterCopy: (@Sendable (String, String, Int) -> Void)? = nil, syncVolume: (@Sendable (String) -> Int32)? = nil) {
-        self.afterCopy = afterCopy; self.syncVolume = syncVolume
+    public var journalFails: (@Sendable () -> Bool)?
+    public init(afterCopy: (@Sendable (String, String, Int) -> Void)? = nil, syncVolume: (@Sendable (String) -> Int32)? = nil,
+                journalFails: (@Sendable () -> Bool)? = nil) {
+        self.afterCopy = afterCopy; self.syncVolume = syncVolume; self.journalFails = journalFails
     }
 }
 
@@ -70,8 +74,13 @@ public final class IngestControl: @unchecked Sendable {
 public enum IngestEngine {
     /// Space check first, so a job never starts that can't finish.
     public static func preflight(job: IngestJob) throws {
-        // A card can't be copied onto itself.
-        if job.driveRoot == job.cardRoot || job.driveRoot.hasPrefix(job.cardRoot + "/") { throw IngestError.sameVolume }
+        // A card can't be copied onto itself, by any name.
+        let drive = ResolvedRoot(job.driveRoot)?.path ?? job.driveRoot, card = ResolvedRoot(job.cardRoot)?.path ?? job.cardRoot
+        if drive == card || drive.hasPrefix(card + "/") { throw IngestError.sameVolume }
+        // Every path here came from somewhere that isn't this engine: a saved setup, a drive's index, a person.
+        for rel in [job.destination] + job.dirsToCreate + job.items.map(\.drivePath) where !Ledger.isInsideDrive(rel) {
+            throw IngestError.outsideDrive(rel)
+        }
         let need = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
         var fs = statfs()
         guard statfs(job.driveRoot, &fs) == 0 else { throw IngestError.driveNotWritable(job.driveRoot) }
@@ -87,35 +96,48 @@ public enum IngestEngine {
     public static func run(job: IngestJob, ledger: Ledger, control: IngestControl, hooks: FaultHooks = FaultHooks(),
                            progress: @escaping @Sendable (IngestProgress) -> Void) throws -> IngestOutcome {
         try preflight(job: job)
+        guard let root = ResolvedRoot(job.driveRoot), let card = ResolvedRoot(job.cardRoot) else { throw IngestError.driveNotWritable(job.driveRoot) }
         let journal = try ledger.open(LedgerHeader(job: job.id, started: Date(), cardName: job.cardName, camera: job.camera,
                                                    destination: job.destination, app: "\(AppInfo.name) \(AppInfo.version)"))
+        journal.fault = hooks.journalFails
         defer { journal.close() }
 
         var made = Set<String>()
-        for d in job.dirsToCreate { try makeDir(d, root: job.driveRoot, made: &made) }
-        sweepStaleTemps(root: job.driveRoot + "/" + job.destination)
+        for d in job.dirsToCreate { try makeDir(d, root: root, made: &made) }
+        let temps = AppInfo.driveFolder + "/tmp"
+        try makeDir(temps, root: root, made: &made)
+        sweepStaleTemps(folder: root.file(temps), ledger: ledger)
 
         let total = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
         var states: [String: FileState] = [:]
+        var proofs: [String: Proof] = [:]
         var weak = false
         var verified = 0
         var recorded: [LedgerEntry] = []
+        let cardMount = job.cardMount ?? MountAnchor(path: job.cardRoot)
 
         func report(_ phase: IngestProgress.Phase, _ i: Int, _ name: String) {
             progress(IngestProgress(phase: phase, fileIndex: i + 1, fileCount: job.items.count, verifiedFiles: verified,
                                     bytesCopied: control.bytesCopied, bytesTotal: total, currentName: name))
         }
 
+        func entry(_ item: IngestItem, hash: UInt64, bytes: UInt64, weak: Bool) -> LedgerEntry {
+            LedgerEntry(cardPath: item.file.relPath, drivePath: item.drivePath, size: bytes, quick: item.quick, hash: hexHash(hash), weak: weak ? true : nil)
+        }
+
         /// A file counts only once its proof is on the drive.
-        func accept(_ item: IngestItem, hash: UInt64, bytes: UInt64, weak thisWeak: Bool) {
+        func accept(_ item: IngestItem, hash: UInt64, bytes: UInt64, stamp: DriveStamp?, weak thisWeak: Bool) {
             weak = weak || thisWeak
-            let entry = LedgerEntry(cardPath: item.file.relPath, drivePath: item.drivePath, size: bytes,
-                                    quick: item.quick, hash: hexHash(hash), weak: thisWeak ? true : nil)
+            let line = entry(item, hash: hash, bytes: bytes, weak: thisWeak)
             do {
-                try journal.record(entry)
-                recorded.append(entry)
-                states[item.file.relPath] = .verified(drivePath: item.drivePath, hash: hexHash(hash), bytes: bytes)
+                try journal.record(line)
+                recorded.append(line)
+                let state = FileState.verified(drivePath: item.drivePath, hash: line.hash, bytes: bytes)
+                states[item.file.relPath] = state
                 verified += 1
+                if let stamp, let cardMount, let driveMount = ledger.mount {
+                    proofs[item.file.relPath] = Proof(state: state, file: item.file, quick: item.quick, stamp: stamp, card: cardMount, drive: driveMount)
+                }
             } catch {
                 states[item.file.relPath] = .failed("couldn't record the check on the drive")
             }
@@ -124,10 +146,10 @@ public enum IngestEngine {
         for (i, item) in job.items.enumerated() {
             if control.isStopped { break }
             report(.copying, i, item.file.name)
-            let src = job.cardRoot + "/" + item.file.relPath
-            let dst = job.driveRoot + "/" + item.drivePath
+            let src = card.file(item.file.relPath)
+            let dst = root.file(item.drivePath)
             let dir = (item.drivePath as NSString).deletingLastPathComponent
-            do { try makeDir(dir, root: job.driveRoot, made: &made) } catch {
+            do { try makeDir(dir, root: root, made: &made) } catch {
                 states[item.file.relPath] = .failed("couldn't create its folder"); continue
             }
 
@@ -142,43 +164,41 @@ public enum IngestEngine {
 
             // Never overwrite. An existing file must prove itself identical, or the job refuses.
             if pathExists(dst) {
-                let both = readBoth(card: src, drive: dst, control: control)
+                let both = readBoth(card: src, drive: dst, on: root, expected: item.file.size, control: control)
                 if both.cancelled { break }
                 guard both.identical else {
                     states[item.file.relPath] = .failed("a different file already has that name on the drive"); continue
                 }
-                accept(item, hash: both.card.hash, bytes: both.card.bytes, weak: !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath))
+                let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath, bytes: both.card.bytes, hash: hexHash(both.card.hash))
+                accept(item, hash: both.card.hash, bytes: both.card.bytes, stamp: DriveStamp(both.drive.stamp), weak: thisWeak)
                 ci_add_u64(control.copied, item.file.size)
                 continue
             }
 
-            let temp = job.driveRoot + "/" + dir + "/.ingest-" + job.id.prefix(8) + "-\(i).part"
-            switch copyAndProve(item, from: src, to: dst, temp: temp, control: control, hooks: hooks, checking: { report(.checking, i, item.file.name) }) {
+            let temp = root.file(temps) + "/" + job.id + "." + String(i) + ".part"
+            let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, control: control, hooks: hooks,
+                                      checking: { report(.checking, i, item.file.name) },
+                                      markWeak: { hash, bytes in (try? journal.record(entry(item, hash: hash, bytes: bytes, weak: true))) != nil })
+            switch result {
             case .stopped: break
             case .failed(let why): states[item.file.relPath] = .failed(why)
-            case .proved(let hash, let bytes, let thisWeak): accept(item, hash: hash, bytes: bytes, weak: thisWeak)
+            case .proved(let hash, let bytes, let thisWeak): accept(item, hash: hash, bytes: bytes, stamp: root.stamp(item.drivePath), weak: thisWeak)
             }
             report(.copying, i, item.file.name)
         }
 
         report(.finishing, max(0, job.items.count - 1), "")
-        for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(job.driveRoot + "/" + d) }
-        if (hooks.syncVolume?(job.driveRoot) ?? ci_sync_volume(job.driveRoot)) != 0 {
-            // The drive wouldn't confirm any of it, so this job's copies stay weak on every later visit too.
-            weak = true
-            for var entry in recorded where entry.weak != true {
-                entry.weak = true
-                try? journal.record(entry)
-            }
-        }
-        return IngestOutcome(states: states, cancelled: control.isStopped, weakVerification: weak)
+        for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
+        // Strong status has to be earned here: a job the drive wouldn't confirm stays weak on every later visit.
+        if !journal.seal(recorded, sync: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
+        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak)
     }
 
     private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped }
 
     /// Up to two attempts. A file only takes its real name once the copy, the drive and a second read of the card agree.
-    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, control: IngestControl,
-                                     hooks: FaultHooks, checking: () -> Void) -> CopyResult {
+    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, control: IngestControl,
+                                     hooks: FaultHooks, checking: () -> Void, markWeak: (UInt64, UInt64) -> Bool) -> CopyResult {
         var lastError = "copy failed"
         for attempt in 1 ... 2 where !control.isStopped {
             let copiedBefore = ci_load_u64(control.copied), checkedBefore = ci_load_u64(control.checked)
@@ -198,14 +218,19 @@ public enum IngestEngine {
 
             // The hash from the copy can't catch a bad read: the same wrong bytes reach both sides.
             // So read the drive back from the device, and read the card a second time, independently.
-            let both = readBoth(card: src, drive: temp, control: control)
+            let both = readBoth(card: src, drive: temp, on: root, expected: item.file.size, control: control)
             if both.cancelled { discard(temp); break }
-            let sizeHolds = item.file.size == 0 || copy.bytes == item.file.size  // virtual volumes list 0
-            guard both.identical, sizeHolds, copy.hash == both.card.hash, copy.bytes == both.card.bytes else {
+            guard both.identical, copy.hash == both.card.hash, copy.bytes == both.card.bytes else {
                 lastError = both.readsOK ? "the copy didn't match the card" : describe(both.drive.stage != 0 ? both.drive : both.card, "checking")
                 discard(temp)
                 rewind()
                 continue
+            }
+            // A later visit finds a file by its name, so a weak copy's mark has to get there first.
+            let thisWeak = copy.weak_flush != 0 || !both.cacheBypassed
+            if thisWeak, !markWeak(copy.hash, copy.bytes) {
+                discard(temp)
+                return .failed("couldn't record the check on the drive")
             }
             // Times are metadata: failing to set them never fails a verified copy.
             _ = ci_set_times(temp, item.file.mtime, item.file.mtimeNanos)
@@ -216,7 +241,7 @@ public enum IngestEngine {
             }
             unlinkAppleDouble(of: temp)
             unlinkAppleDouble(of: dst)
-            return .proved(hash: copy.hash, bytes: copy.bytes, weak: copy.weak_flush != 0 || !both.cacheBypassed)
+            return .proved(hash: copy.hash, bytes: copy.bytes, weak: thisWeak)
         }
         return control.isStopped ? .stopped : .failed(lastError)
     }
@@ -224,11 +249,17 @@ public enum IngestEngine {
     /// Proves "already on the drive" by reading both sides in full. Anything less isn't proof.
     /// With `record` off nothing is written to the drive: a check, for a tool that must leave a drive as it found it.
     public static func confirm(cardRoot: String, driveRoot: String, candidates: [(file: CardFile, drivePath: String, quick: String)],
-                               ledger: Ledger, jobName: String, control: IngestControl, record: Bool = true,
-                               progress: @escaping @Sendable (Int, Int) -> Void) -> (states: [String: FileState], weak: Bool) {
+                               ledger: Ledger, jobName: String, control: IngestControl, record: Bool = true, cardMount: MountAnchor? = nil,
+                               progress: @escaping @Sendable (Int, Int) -> Void) -> (states: [String: FileState], proofs: [String: Proof], weak: Bool) {
         var out: [String: FileState] = [:]
+        var proofs: [String: Proof] = [:]
         var weak = false
-        guard !candidates.isEmpty else { return (out, false) }
+        guard !candidates.isEmpty else { return (out, proofs, false) }
+        guard let root = ResolvedRoot(driveRoot), let card = ResolvedRoot(cardRoot) else {
+            for c in candidates { out[c.file.relPath] = .missing }
+            return (out, proofs, false)
+        }
+        let cardMount = cardMount ?? MountAnchor(path: cardRoot)
         ci_store_u64(control.checked, 0)
         let journal = !record ? nil : try? ledger.open(LedgerHeader(job: UUID().uuidString, started: Date(), cardName: jobName, camera: nil,
                                                                     destination: "", app: "\(AppInfo.name) \(AppInfo.version)"))
@@ -236,36 +267,52 @@ public enum IngestEngine {
         for (i, c) in candidates.enumerated() {
             if control.isStopped { break }
             progress(i + 1, candidates.count)
-            let both = readBoth(card: cardRoot + "/" + c.file.relPath, drive: driveRoot + "/" + c.drivePath, control: control)
+            let both = readBoth(card: card.file(c.file.relPath), drive: root.file(c.drivePath), on: root, expected: c.file.size, control: control)
             if both.cancelled { break }
             guard both.identical else { out[c.file.relPath] = .missing; continue }   // looked the same, wasn't. It gets copied.
             let hash = hexHash(both.card.hash)
-            let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath)
+            let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
             weak = weak || thisWeak
-            out[c.file.relPath] = .verified(drivePath: c.drivePath, hash: hash, bytes: both.card.bytes)
-            try? journal?.record(LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes,
-                                             quick: c.quick, hash: hash, weak: thisWeak ? true : nil))
+            let line = LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes, quick: c.quick, hash: hash, weak: thisWeak ? true : nil)
+            let kept = (try? journal?.record(line)) != nil
+            // A weak mark that won't stay on the drive can't stay weak on a later visit, so this can't count as proved.
+            if record, thisWeak, journal == nil || !kept {
+                out[c.file.relPath] = .failed("couldn't record the check on the drive")
+                continue
+            }
+            let state = FileState.verified(drivePath: c.drivePath, hash: hash, bytes: both.card.bytes)
+            out[c.file.relPath] = state
+            if let cardMount, let driveMount = ledger.mount {
+                proofs[c.file.relPath] = Proof(state: state, file: c.file, quick: c.quick, stamp: DriveStamp(both.drive.stamp), card: cardMount, drive: driveMount)
+            }
         }
-        return (out, weak)
+        return (out, proofs, weak)
     }
 
     private struct BothSides {
         var card: ci_result, drive: ci_result
-        var cacheBypassed: Bool     // false when the drive side may have come from the Mac's cache
+        var cacheBypassed: Bool     // false when either side may have come from the Mac's cache
+        var expected: UInt64        // as listed. 0 can't be held against a read: virtual volumes list real files at 0.
+        var driveDevice: Int64
         var cancelled: Bool { card.stage == Int32(CI_STAGE_CANCELLED) || drive.stage == Int32(CI_STAGE_CANCELLED) }
         var readsOK: Bool { card.stage == 0 && drive.stage == 0 }
-        var identical: Bool { readsOK && card.hash == drive.hash && card.bytes == drive.bytes }
+        /// Two reads of one file are not two copies, and a file on another volume isn't on this drive.
+        private var twoFiles: Bool { drive.stamp.dev == driveDevice && (card.stamp.dev != drive.stamp.dev || card.stamp.ino != drive.stamp.ino) }
+        var identical: Bool {
+            readsOK && twoFiles && card.hash == drive.hash && card.bytes == drive.bytes && (expected == 0 || card.bytes == expected)
+        }
     }
 
-    /// The one read behind every proof: each side in full, from the device, this session.
-    private static func readBoth(card: String, drive: String, control: IngestControl) -> BothSides {
+    /// The one read behind every proof: each side in full, from the device, while it stays in. Both paths are resolved,
+    /// so a link anywhere on the way refuses the read. Both caches have to clear, or the proof is weak.
+    private static func readBoth(card: String, drive: String, on root: ResolvedRoot, expected: UInt64, control: IngestControl) -> BothSides {
         var a = ci_result(), b = ci_result()
-        var invalidated: Int32 = 0
+        var cardCleared: Int32 = 0, driveCleared: Int32 = 0
         DispatchQueue.concurrentPerform(iterations: 2) { which in
-            if which == 0 { a = ci_hash_uncached(card, control.cancelFlag, nil, control.checked) }
-            else { b = ci_hash_uncached(drive, control.cancelFlag, &invalidated, nil) }
+            if which == 0 { a = ci_hash_file(card, 1, control.cancelFlag, &cardCleared, control.checked) }
+            else { b = ci_hash_file(drive, 1, control.cancelFlag, &driveCleared, nil) }
         }
-        return BothSides(card: a, drive: b, cacheBypassed: invalidated != 0)
+        return BothSides(card: a, drive: b, cacheBypassed: cardCleared != 0 && driveCleared != 0, expected: expected, driveDevice: root.device)
     }
 
     private static func describe(_ r: ci_result, _ doing: String) -> String {
@@ -275,15 +322,14 @@ public enum IngestEngine {
 
     static func pathExists(_ p: String) -> Bool { var st = stat(); return lstat(p, &st) == 0 }
 
-    /// A crash or a pulled drive can leave a temp file behind. It never held a real name, so it's safe to remove.
-    static func sweepStaleTemps(root: String) {
-        var stale: [String] = []
-        walkTree(root) { e, rel in
-            let name = (rel as NSString).lastPathComponent
-            if e.type == Int32(CI_ENTRY_FILE), name.hasPrefix(".ingest-"), name.hasSuffix(".part") { stale.append(root + "/" + rel) }
-            return 0
+    /// A crash or a pulled drive can leave a temp file behind. Temps only ever live in the app's own folder, so nothing
+    /// someone else made can be taken for one, and a job that's still running keeps its own.
+    static func sweepStaleTemps(folder: String, ledger: Ledger) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return }
+        for name in names where name.hasSuffix(".part") && !name.hasPrefix("._") {
+            let job = String(name.prefix { $0 != "." })
+            if !ledger.isLive(job: job) { discard(folder + "/" + name) }
         }
-        for p in stale { discard(p) }
     }
 
     private static func discard(_ temp: String) { unlink(temp); unlinkAppleDouble(of: temp) }
@@ -294,16 +340,15 @@ public enum IngestEngine {
         unlink(ns.deletingLastPathComponent + "/._" + ns.lastPathComponent)
     }
 
-    static func makeDir(_ rel: String, root: String, made: inout Set<String>) throws {
+    static func makeDir(_ rel: String, root: ResolvedRoot, made: inout Set<String>) throws {
         guard !rel.isEmpty, rel != ".", !made.contains(rel) else { return }
         var built = ""
         for part in rel.split(separator: "/", omittingEmptySubsequences: true) {
             built = built.isEmpty ? String(part) : built + "/" + part
             if made.contains(built) { continue }
-            let full = root + "/" + built
-            if mkdir(full, 0o755) != 0 && errno != EEXIST { throw IngestError.driveNotWritable(root) }
-            var st = stat()
-            guard lstat(full, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { throw IngestError.driveNotWritable(root) }
+            let full = root.file(built)
+            if mkdir(full, 0o755) != 0 && errno != EEXIST { throw IngestError.driveNotWritable(root.path) }
+            guard root.isPlainFolder(built) else { throw IngestError.driveNotWritable(root.path) }
             unlinkAppleDouble(of: full)
             made.insert(built)
         }

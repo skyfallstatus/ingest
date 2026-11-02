@@ -151,7 +151,7 @@ private func ingest(card: String, drive: String, dest: String, hooks: FaultHooks
     let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: dest, states: states), ledger: ledger, control: IngestControl(), hooks: hooks) { _ in }
     for (k, v) in out.states { states[k] = v }
     let issues = Pipeline.settle(issues: [], states: states, weak: out.weakVerification, driveRoot: drive)
-    let r = Pipeline.conclude(read: read, states: states, issues: issues, driveRoot: drive, kind: kind)
+    let r = Pipeline.conclude(read: read, states: states, proved: out.proofs, issues: issues, driveRoot: drive, kind: kind)
     return (r.verdict, r.states)
 }
 
@@ -179,8 +179,37 @@ private func ingest(card: String, drive: String, dest: String, hooks: FaultHooks
     let read = CardReader.read(root: card) { _ in .video }
     let s = CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: DriveIndex.scan(root: drive), driveRoot: drive)
     #expect(s["A.MP4"] == .missing)
-    let v = Pipeline.conclude(read: read, states: s, issues: [], driveRoot: drive) { _ in .video }.verdict
+    let v = Pipeline.conclude(read: read, states: s, proved: [:], issues: [], driveRoot: drive) { _ in .video }.verdict
     #expect(v != .safe)
+}
+
+/// A card just proved: the job's own states and proofs, as the last look would get them.
+private func proved(card: String, drive: String) throws -> (read: CardRead, out: IngestOutcome) {
+    let read = CardReader.read(root: card) { _ in .video }
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }.verdict == .safe)
+    return (read, out)
+}
+
+@Test func aProvedFileDeletedFromTheDriveFailsTheLastLook() throws {
+    let card = temp(), drive = temp()
+    write(card, "A.MP4", 2_000_000); write(card, "B.MP4", 2_000_000)
+    let (read, out) = try proved(card: card, drive: drive)
+    try FileManager.default.removeItem(atPath: drive + "/S/A.MP4")
+    let r = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }
+    #expect(r.states["A.MP4"] == .missing)
+    #expect(r.verdict != .safe)
+}
+
+@Test func aProvedFileCutShortOnTheDriveFailsTheLastLook() throws {
+    let card = temp(), drive = temp()
+    write(card, "A.MP4", 3_000_000)
+    let (read, out) = try proved(card: card, drive: drive)
+    let fh = FileHandle(forUpdatingAtPath: drive + "/S/A.MP4")!
+    try fh.truncate(atOffset: 1_000_000); try fh.close()
+    let r = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }
+    #expect(r.states["A.MP4"] == .missing)
+    #expect(r.verdict != .safe)
 }
 
 @Test func truncatedCopyOnDriveIsNotAccepted() throws {
@@ -254,7 +283,7 @@ private func flipByte(_ path: String) {
     }
     #expect(out.cancelled)
     #expect(tempFiles(on: drive).isEmpty)
-    #expect(Pipeline.conclude(read: read, states: out.states, issues: [], driveRoot: drive) { _ in .video }.verdict != .safe)
+    #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }.verdict != .safe)
     #expect(try ingest(card: card, drive: drive, dest: "S").0 == .safe)
 }
 
@@ -340,6 +369,18 @@ private func flipByte(_ path: String) {
     #expect(first != second && (second as NSString).lastPathComponent.hasPrefix("0002_"))
     let chain = try String(contentsOfFile: root + "/ascmhl/ascmhl_chain.xml", encoding: .utf8)
     #expect(chain.contains("sequencenr=\"1\"") && chain.contains("sequencenr=\"2\""))
+}
+
+@Test func aDamagedIndexCacheIsRefusedNotFatal() throws {
+    let url = URL(fileURLWithPath: temp() + "/i.idx")
+    var d = Data()
+    withUnsafeBytes(of: UInt32(0x31495844)) { d.append(contentsOf: $0) }
+    withUnsafeBytes(of: UInt64.max) { d.append(contentsOf: $0) }
+    try d.write(to: url)
+    #expect(DriveIndex.load(from: url) == nil)
+    withUnsafeBytes(of: UInt64(1000)) { d.replaceSubrange(4..<12, with: $0) }
+    try d.write(to: url)
+    #expect(DriveIndex.load(from: url) == nil)
 }
 
 @Test func indexCacheRoundTrips() {

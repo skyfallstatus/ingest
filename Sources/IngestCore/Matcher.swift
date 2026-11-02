@@ -5,16 +5,17 @@ public enum CardMatcher {
     private static let maxCandidates = 16
     private static let oneMiB: UInt64 = 1 << 20
 
-    /// Nothing comes out of here `.verified` unless it's in `proved` and the file is still that file: bytes read in full
-    /// on both sides, this session.
+    /// Nothing comes out of here `.verified` unless it's in `proved` and both files are still those files, on the same
+    /// mounts: bytes read in full on both sides, while this card and this drive have stayed in.
     /// Everything else is at most `.likely`, and has to prove itself by being read.
     public static func match(read: CardRead, ledger: Ledger, index: DriveIndex?, driveRoot: String,
                              proved: [String: Proof] = [:]) -> [String: FileState] {
         var out: [String: FileState] = [:]
         var cache: [String: String] = [:]   // drive path → fingerprint
+        let root = ResolvedRoot(driveRoot)
         for f in read.listing.files {
             guard let quick = read.quick[f.relPath] else { out[f.relPath] = .failed("won't open"); continue }
-            if let proof = proved[f.relPath], proof.holds(for: f, quick: quick) { out[f.relPath] = proof.state; continue }
+            if let proof = proved[f.relPath], let root, proof.holds(for: f, quick: quick, on: root) { out[f.relPath] = proof.state; continue }
             if let e = ledger.entry(size: f.size, quick: quick) {
                 out[f.relPath] = .likely(drivePath: e.drivePath)
                 continue
@@ -58,8 +59,9 @@ public enum CardMatcher {
             case .likely(let p), .verified(let p, _, _): drive = p
             default: continue
             }
-            guard drive.hasSuffix("/" + rel) else { continue }  // only a whole-tree copy is a home
-            counts[String(drive.dropLast(rel.utf8.count + 1)), default: 0] += 1
+            let tail = "/" + rel
+            guard drive.hasSuffix(tail) else { continue }       // only a whole-tree copy is a home
+            counts[String(drive.dropLast(tail.count)), default: 0] += 1
         }
         return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
     }

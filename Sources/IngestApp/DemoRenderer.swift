@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor enum DemoRenderer {
     private static func volume(_ name: String, path: String, total: UInt64 = 1_000_000_000_000) -> Volume {
         Volume(path: path, name: name, uuid: nil, total: total, free: 412_000_000_000, fsType: "exfat",
-               isReadOnly: false, isInternal: false)
+               isReadOnly: false, isInternal: false, anchor: MountAnchor(path: "/tmp"))
     }
 
     private static func sampleSetup() -> DriveSetup {
@@ -21,8 +21,10 @@ import SwiftUI
                                          mostRecentClient: "Tidemark Rowing Club", mostRecentDay: CalendarDay(year: 2026, month: 10, day: 19)))
     }
 
+    @MainActor private static var stagedDrive: DriveState?
+
     private static func drive(_ model: AppModel) -> DriveState {
-        let d = DriveState(volume: volume("Field SSD", path: "/tmp/demo-ssd"), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none"), setup: sampleSetup())
+        let d = DriveState(volume: volume("Field SSD", path: "/tmp/demo-ssd"), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none", mount: MountAnchor(path: "/tmp")), setup: sampleSetup())
         var e: [DriveEntry] = []
         for p in ["Clients", "Clients/Lantern Bakery Co.", "Clients/Tidemark Rowing Club",
                   "Clients/Lantern Bakery Co./02.09.26 Launch", "Clients/Lantern Bakery Co./02.09.26 Launch/Footage",
@@ -35,6 +37,7 @@ import SwiftUI
         d.foldersRead = 212
         model.drives = [d]
         model.workingDrive = d
+        stagedDrive = d
         return d
     }
 
@@ -57,7 +60,7 @@ import SwiftUI
         c.probe = ProbeResult(cameras: [CameraOnCard(identity: id, clipCount: files)], reel: name == "A082" ? "A082" : nil,
                               captureDays: [CaptureDay(day: day ?? DemoRenderer.day, fileCount: files, source: .cameraMetadata)], hasVideo: true, clipChecks: mp4s)
         c.phase = phase
-        c.provedDriveKey = "-|Field SSD|1000000000000"
+        c.provedOn = stagedDrive
         return c
     }
 
@@ -251,7 +254,7 @@ import SwiftUI
             c.ejectError = "Premiere Pro is using this card. Close it and try again."
             return c
         }
-        state("weak-drive") { hold(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This drive wouldn't confirm it had finished writing. Check the footage plays before formatting.")) }
+        state("weak-drive") { hold(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This copy couldn't be checked as strictly as usual: a flush wasn't confirmed, or a cache wouldn't clear. Check the footage plays before formatting.")) }
         state("red-part-missing") {
             let c = hold(CardIssue(severity: .hold, code: "red.missing-part", message: "RED clip A001_C004 is missing part 003, so it would play short.", paths: []))
             c.probe.clipChecks = ClipCheckReport(counts: [ClipCheckCount(kind: .redParts, format: "R3D", checked: 148, unconfirmed: 0)])

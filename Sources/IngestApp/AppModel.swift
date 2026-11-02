@@ -19,6 +19,8 @@ import UserNotifications
     var id: String { volume.id }
     var name: String { volume.name }
     var path: String { volume.path }
+    /// False from the moment this mount ends. A DriveState is one mount of one drive, never a place.
+    var isCurrent: Bool { ledger.mount?.isCurrent == true }
 
     init(volume: Volume, ledger: Ledger, setup: DriveSetup?) { self.volume = volume; self.ledger = ledger; self.setup = setup }
 
@@ -73,8 +75,8 @@ import UserNotifications
     var pendingDestination: Destination?
     var extraFolders: [String] = []
     var isMatching = false
-    var proved: [String: Proof] = [:]   // read in full on both sides, in this run of the app, on this drive
-    var provedDriveKey: String?
+    var proved: [String: Proof] = [:]   // read in full on both sides, while this card and `provedOn` have stayed in
+    var provedOn: DriveState?           // the one drive anything here says anything about
     var weak = false
     var volumeGone = false
     var needsRematch = false
@@ -116,30 +118,18 @@ import UserNotifications
         if case .notSafe(_, _, let why)? = verdict { return why }
         return []
     }
-    /// The only reading of the verdict that may turn anything green: concluded, current, and about this drive.
+    /// The only reading of the verdict that may turn anything green: concluded, current, and about this mount of this
+    /// drive, with this mount of this card.
     func isSafe(on drive: DriveState?) -> Bool {
-        verdict == .safe && phase == .finished && provedDriveKey != nil && provedDriveKey == drive?.volume.key
+        guard verdict == .safe, phase == .finished, let drive, provedOn === drive else { return false }
+        return drive.isCurrent && volume.isCurrent
     }
 
-    /// Keeps what these states prove, tied to the files as this read saw them.
-    func keepProof(of found: [String: FileState], read: CardRead) {
-        let files = Dictionary(read.listing.files.map { ($0.relPath, $0) }, uniquingKeysWith: { a, _ in a })
-        for (rel, state) in found {
-            if case .verified = state, let file = files[rel], let quick = read.quick[rel] {
-                proved[rel] = Proof(state: state, file: file, quick: quick)
-            }
-        }
+    /// Everything a drive said about this card, gone in one step, before anything is said about another drive.
+    func forgetDrive() {
+        proved = [:]; states = [:]; weak = false; verdict = nil; issues = []; provedOn = nil; existingHome = nil
+        if !isBusy, !volumeGone { phase = .reading(done: 0, total: 0) }
     }
-}
-
-/// What a card proved in this run of the app, so a remount doesn't read it all again. Never written down.
-struct RememberedProof {
-    var proved: [String: Proof]
-    var driveKey: String
-    var weak: Bool
-    var taken = Date()
-    /// A menu bar app can run for weeks. A read from another day isn't this session's.
-    var isFresh: Bool { Date().timeIntervalSince(taken) < 12 * 3600 }
 }
 
 @MainActor @Observable final class AppModel {
@@ -160,8 +150,12 @@ struct RememberedProof {
     private var sleepToken: NSObjectProtocol?
     private var refreshPending = false
     private var announced: Set<String> = []     // what's already had its moment on screen
-    private var remembered: [String: RememberedProof] = [:]     // by card volume
     private var askedPermission = false
+    private var looks = 0                       // the newest look at the volumes wins, whatever order they land in
+    /// Every volume and what it is. Off the main thread: the first read can wait on a permission prompt.
+    var findVolumes: @Sendable (_ allowDiskImages: Bool, _ overrides: [String: String]) -> [(Volume, VolumeRole)] = { allow, overrides in
+        VolumeWatcher.scan(allowDiskImages: allow).map { ($0, VolumeWatcher.role(of: $0, overrides: overrides)) }
+    }
     var isDemo = false
     var opensOnCardIn = true { didSet { stores.opensOnCardIn = opensOnCardIn } }
     var checksForUpdates = false { didSet { stores.checksForUpdates = checksForUpdates } }
@@ -201,14 +195,23 @@ struct RememberedProof {
     }
 
     func refresh() async {
-        let allow = stores.allowDiskImages, overrides = stores.overrides
-        let found: [(Volume, VolumeRole)] = await Task.detached(priority: .userInitiated) {
-            VolumeWatcher.scan(allowDiskImages: allow).map { ($0, VolumeWatcher.role(of: $0, overrides: overrides)) }
+        looks += 1
+        let look = looks
+        let allow = stores.allowDiskImages, overrides = stores.overrides, find = findVolumes
+        let known = Set(drives.filter(\.isCurrent).map(\.path))
+        // A new drive's ledger and setup are read here too: a large ledger is no reason to freeze the widget.
+        let found: [(Volume, VolumeRole, (Ledger, DriveSetup?)?)] = await Task.detached(priority: .userInitiated) {
+            find(allow, overrides).map { v, role in
+                (v, role, role == .drive && !known.contains(v.path) ? (Ledger(driveRoot: v.path, mount: v.anchor), Stores.setup(onDrive: v.path)) : nil)
+            }
         }.value
+        guard look == looks else { return }
 
-        let live = Set(found.map(\.0.path))
+        /// The same mount, still there. A path is only a place: another volume can be at it before anyone hears the first one go.
+        func stillHere(_ v: Volume) -> Bool { v.isCurrent && found.contains { $0.0.path == v.path && $0.0.key == v.key } }
+
         // A card pulled out mid-copy stays on screen: someone needs to hear about it.
-        for c in cards where !live.contains(c.volume.path) && !c.ejected {
+        for c in cards where !stillHere(c.volume) && !c.ejected {
             // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too.
             let cutShort = c.phase == .ready && c.pendingDestination != nil && c.filesToGo > 0
             if c.phase == .copying || cutShort {
@@ -220,22 +223,22 @@ struct RememberedProof {
             } else { queue.removeAll { $0 === c }; cards.removeAll { $0 === c } }
         }
         drives.removeAll { d in
-            let gone = !live.contains(d.path)
-            if gone && d === workingDrive {
+            guard !stillHere(d.volume) else { return false }
+            if d === workingDrive {
                 for c in cards where c.isBusy { c.control.stop(); c.error = "\(d.name) was unplugged. Plug it back in to finish." }
             }
-            return gone
+            return true
         }
-        if let w = workingDrive, !live.contains(w.path) {
+        if let w = workingDrive, !drives.contains(where: { $0 === w }) {
             workingDrive = nil
-            for c in cards where !c.isBusy { finishMatch(c) }   // no drive, no green
+            driveChanged()      // no drive, no green
         }
-        maybeCards = found.compactMap { v, r in if case .maybeCard(let why) = r { (v, why) } else { nil } }
-        unreadable = found.compactMap { v, r in r == .unreadable ? v : nil }
+        maybeCards = found.compactMap { v, r, _ in if case .maybeCard(let why) = r { (v, why) } else { nil } }
+        unreadable = found.compactMap { v, r, _ in r == .unreadable ? v : nil }
 
-        for (v, role) in found where role == .drive && !drives.contains(where: { $0.path == v.path }) {
-            let setup = stores.setup(onDrive: v.path)
-            let d = DriveState(volume: v, ledger: Ledger(driveRoot: v.path), setup: setup)
+        for (v, role, load) in found where role == .drive && !drives.contains(where: { $0.path == v.path }) {
+            guard let load else { scheduleRefresh(); continue }     // this mount ended just now: the next look reads the new one
+            let d = DriveState(volume: v, ledger: load.0, setup: load.1)
             drives.append(d)
             loadCachedIndex(d)
             refreshIndex(d)
@@ -243,14 +246,11 @@ struct RememberedProof {
         chooseWorkingDrive()
         // Whatever mounts at a path may be a different card, so a session never outlives its volume.
         cards.removeAll { c in
-            !c.isBusy && found.contains { $0.0.path == c.volume.path && ($0.0.key != c.volume.key || c.volumeGone) }
+            !c.isBusy && (c.volumeGone || !stillHere(c.volume)) && found.contains { $0.0.path == c.volume.path }
         }
         var arrived = false
-        for (v, role) in found where role == .card && !cards.contains(where: { $0.volume.path == v.path }) {
-            let c = CardSession(volume: v)
-            if let memory = remembered[v.key], memory.isFresh {
-                c.proved = memory.proved; c.provedDriveKey = memory.driveKey; c.weak = memory.weak
-            }
+        for (v, role, _) in found where role == .card && !cards.contains(where: { $0.volume.path == v.path }) {
+            let c = CardSession(volume: v)      // nothing carries over: proof ends when a card leaves the Mac
             cards.append(c)
             arrived = true
             Task { await self.readCard(c) }
@@ -258,24 +258,42 @@ struct RememberedProof {
         let waiting = Set(maybeCards.map(\.volume.key) + unreadable.map(\.key))
         if arrived || !waiting.subtracting(announced).isEmpty { onArrival?() }
         announced = waiting
-        if let first = onFirstLook { onFirstLook = nil; first() }
+        // A volume that can't be read says why first. Setup follows once it can be, or it would hide the way out.
+        if unreadable.isEmpty, let first = onFirstLook { onFirstLook = nil; first() }
     }
 
     private func chooseWorkingDrive() {
         // The saved drive always wins when it turns up, unless a copy is running.
         if let k = stores.workingDriveKey, workingDrive?.volume.key != k, !isCopying,
            let hit = drives.first(where: { $0.volume.key == k }) {
-            workingDrive = hit; rematchAll(); return
+            workingDrive = hit; driveChanged(); return
         }
         if workingDrive != nil { return }
         // A drive that isn't set up is never chosen silently: it could be camera media nobody recognised.
-        if let hit = drives.first(where: { $0.setup != nil }) { workingDrive = hit; rematchAll() }
+        if let hit = drives.first(where: { $0.setup != nil }) { workingDrive = hit; driveChanged() }
     }
 
+    /// A job belongs to the drive it started on, so nothing changes the working drive while one is running or waiting.
     func use(drive: DriveState) {
+        guard !isCopying else { return }
+        guard workingDrive !== drive else { rematchAll(); return }
         workingDrive = drive
         stores.workingDriveKey = drive.volume.key
-        rematchAll()
+        driveChanged()
+    }
+
+    /// Every card, stopped ones too, loses all it knew from the old drive before the new one is looked at, so nothing about
+    /// one drive can be read as being about another, even for a moment.
+    private func driveChanged() {
+        for c in cards where !c.isBusy {
+            c.forgetDrive()
+            if c.read != nil, !c.volumeGone { Task { await self.matchCard(c) } }
+        }
+    }
+
+    /// A name to tell this drive by. Two drives can carry one label, and macOS mounts the second under a numbered path.
+    func label(of d: DriveState) -> String {
+        drives.filter { $0.name == d.name }.count > 1 ? (d.path as NSString).lastPathComponent : d.name
     }
 
     func setRole(_ role: String, for v: Volume) {
@@ -301,7 +319,7 @@ struct RememberedProof {
         guard workingDrive === d else { return }
         workingDrive = nil
         if stores.workingDriveKey == v.key { stores.workingDriveKey = nil }
-        for c in cards where !c.isBusy { finishMatch(c) }   // no drive, no green
+        driveChanged()      // no drive, no green
     }
 
     // MARK: Drive index
@@ -351,19 +369,23 @@ struct RememberedProof {
     private nonisolated static func kind(_ path: String) -> FileKind { CardProber.kind(ofRelativePath: path) }
 
     func readCard(_ c: CardSession) async {
-        let root = c.volume.path
+        let root = c.volume.path, mount = c.volume.anchor
         // A Codex virtual volume fills in gradually: wait until it stops changing before trusting a listing.
-        if CardProber.isCodexVirtual(root: URL(fileURLWithPath: root)) {
-            var last: Date?
+        func marker() async -> Date? {
+            await Task.detached(priority: .userInitiated) { () -> Date? in
+                guard CardProber.isCodexVirtual(root: URL(fileURLWithPath: root)) else { return nil }
+                return (try? FileManager.default.attributesOfItem(atPath: root + "/.codexvfs"))?[.modificationDate] as? Date
+            }.value
+        }
+        if var last = await marker() {
             for _ in 0..<60 {
-                let m = (try? FileManager.default.attributesOfItem(atPath: root + "/.codexvfs"))?[.modificationDate] as? Date
-                if m == last { break }
-                last = m
                 try? await Task.sleep(for: .seconds(2))
+                guard let m = await marker(), m != last else { break }
+                last = m
             }
         }
         let read = await Task.detached(priority: .userInitiated) {
-            CardReader.read(root: root, kind: Self.kind) { done, total in
+            CardReader.read(root: root, kind: Self.kind, mount: mount) { done, total in
                 Task { @MainActor in if !c.isBusy { c.phase = .reading(done: done, total: total) } }
             }
         }.value
@@ -384,18 +406,22 @@ struct RememberedProof {
     }
 
     private func matchOnce(_ c: CardSession) async {
-        guard let read = c.read, let drive = workingDrive else {
-            if let read = c.read { await probeCard(c, read: read, focus: nil); finishMatch(c) }
+        guard let read = c.read else { return }
+        guard let drive = workingDrive else {
+            await probeCard(c, read: read, focus: nil)
+            await finish(c)
             return
         }
-        if c.provedDriveKey != drive.volume.key {   // proof is about one drive
-            c.proved = [:]; c.weak = false; c.provedDriveKey = drive.volume.key
+        if c.provedOn !== drive {
+            c.forgetDrive()
+            c.provedOn = drive
         }
+        func current() -> Bool { !c.isBusy && c.provedOn === drive && workingDrive === drive }
         let ledger = drive.ledger, index = drive.index, root = drive.path, proved = c.proved
         var states = await Task.detached(priority: .userInitiated) {
             CardMatcher.match(read: read, ledger: ledger, index: index, driveRoot: root, proved: proved)
         }.value
-        guard !c.isBusy else { return }
+        guard current() else { return }
         // Copies this app didn't make still have to prove themselves, by reading both sides.
         let likely = read.listing.files.compactMap { f -> (file: CardFile, drivePath: String, quick: String)? in
             guard case .likely(let p)? = states[f.relPath], let q = read.quick[f.relPath] else { return nil }
@@ -404,28 +430,28 @@ struct RememberedProof {
         c.states = states
         let focus = Set(read.listing.files.map(\.relPath).filter { if case .verified? = states[$0] { false } else { true } })
         await probeCard(c, read: read, focus: focus)
+        guard current() else { return }
         if !likely.isEmpty {
             c.phase = .checking(done: 0, total: likely.count)
-            let control = c.control, cardRoot = read.listing.root, name = c.name
+            let control = c.control, cardRoot = read.listing.root, name = c.name, mount = read.mount
             c.liveChecked = 0
             c.checkBytes = likely.reduce(0) { $0 + $1.file.size }
             c.checkStarted = Date()
             let ticker = trackBytes(of: c)
             defer { ticker.cancel() }
             let checked = await Task.detached(priority: .userInitiated) {
-                IngestEngine.confirm(cardRoot: cardRoot, driveRoot: root, candidates: likely, ledger: ledger, jobName: name, control: control) { d, t in
+                IngestEngine.confirm(cardRoot: cardRoot, driveRoot: root, candidates: likely, ledger: ledger, jobName: name, control: control, cardMount: mount) { d, t in
                     Task { @MainActor in if !c.isBusy { c.phase = .checking(done: d, total: t) } }
                 }
             }.value
+            guard current() else { return }
             for (k, v) in checked.states { states[k] = v }
-            c.keepProof(of: checked.states, read: read)
+            c.proved.merge(checked.proofs) { _, new in new }
             if checked.weak { c.weak = true }
             c.states = states
-            remember(proofOf: c)
         }
-        guard !c.isBusy else { return }
         c.existingHome = CardMatcher.existingHome(states: states, files: read.listing.files)
-        finishMatch(c)
+        await finish(c)
     }
 
     /// Bytes move mid-file, so they're read directly rather than waiting for the next file.
@@ -439,14 +465,6 @@ struct RememberedProof {
             }
         }
     }
-
-    private func remember(proofOf c: CardSession) {
-        guard c.volume.uuid != nil, let driveKey = c.provedDriveKey, !c.proved.isEmpty else { return }
-        remembered[c.volume.key] = RememberedProof(proved: c.proved, driveKey: driveKey, weak: c.weak)
-    }
-
-    /// As quitting would.
-    func forgetProofs() { remembered = [:] }
 
     private func probeCard(_ c: CardSession, read: CardRead, focus: Set<String>?) async {
         let url = URL(fileURLWithPath: read.listing.root), files = read.listing.files
@@ -464,23 +482,30 @@ struct RememberedProof {
         }
     }
 
-    private func finishMatch(_ c: CardSession) {
-        guard !c.isBusy else { return }
-        conclude(c)
+    /// The verdict. The last look reads every file on the card again, so it's taken off the main thread, and only counts
+    /// if the card and drive it was about are still the ones in front of us.
+    private func finish(_ c: CardSession) async {
+        guard !c.isBusy, let read = c.read else { return }
+        guard let drive = workingDrive else {
+            c.issues = c.probe.issues
+            c.verdict = Verdict.withoutDrive(read: read, issues: c.probe.issues)
+            c.phase = c.isEmpty ? .finished : .ready
+            return
+        }
+        let states = c.states, proved = c.proved, probed = c.probe.issues, weak = c.weak, ledger = drive.ledger, root = drive.path
+        let end = await Task.detached(priority: .userInitiated) {
+            let issues = Pipeline.settle(issues: probed, states: states, weak: weak, driveRoot: root, ledger: ledger)
+            return Pipeline.conclude(read: read, states: states, proved: proved, issues: issues, driveRoot: root, kind: Self.kind)
+        }.value
+        guard !c.isBusy, c.provedOn === drive, workingDrive === drive else { return }
+        c.issues = end.issues; c.states = end.states; c.verdict = end.verdict
+        c.proved = c.proved.filter { if case .verified? = end.states[$0.key] { true } else { false } }
         c.phase = (c.isSafe || c.isHold || c.isEmpty) ? .finished : .ready
     }
 
-    private func conclude(_ c: CardSession) {
-        guard let read = c.read else { return }
-        let drive = workingDrive
-        if let drive {
-            let issues = Pipeline.settle(issues: c.probe.issues, states: c.states, weak: c.weak, driveRoot: drive.path)
-            let (v, states) = Pipeline.conclude(read: read, states: c.states, issues: issues, driveRoot: drive.path, kind: Self.kind)
-            c.issues = issues; c.states = states; c.verdict = v
-        } else {
-            c.issues = c.probe.issues
-            c.verdict = read.listing.files.isEmpty ? .empty : .notSafe(remaining: read.listing.files.count, total: read.listing.files.count, reasons: [])
-        }
+    /// Goes over a settled card again when someone comes to look at it. It costs a look at each file, never a full read.
+    func lookAgain() {
+        for c in cards where c.phase == .finished && !c.isMatching { Task { await self.finish(c) } }
     }
 
     // MARK: Copying
@@ -493,7 +518,15 @@ struct RememberedProof {
             c.error = "\(c.name) isn't plugged in any more."
             return
         }
+        guard !reserved(besides: c).contains(matchKey(destination.footageRoot)) else {
+            c.error = "Another card is going to that folder."
+            return
+        }
         c.control.reset()
+        if c.provedOn !== drive {
+            c.forgetDrive()
+            c.provedOn = drive
+        }
         do {
             try IngestEngine.preflight(job: job(for: c, read: read, drive: drive, destination: destination, extraFolders: extraFolders))
             c.pendingDestination = destination
@@ -508,8 +541,18 @@ struct RememberedProof {
         }
     }
 
+    /// Folders other cards are about to fill. They aren't on the drive yet, so the drive can't say they're taken.
+    func reserved(besides card: CardSession) -> Set<String> {
+        var out: Set<String> = []
+        for c in cards where c !== card && c.phase != .finished {
+            guard let d = c.pendingDestination else { continue }
+            for path in [d.footageRoot, d.stillsRoot, d.audioRoot].compactMap({ $0 }) { out.insert(matchKey(path)) }
+        }
+        return out
+    }
+
     private func job(for c: CardSession, read: CardRead, drive: DriveState, destination: Destination, extraFolders: [String]) -> IngestJob {
-        var job = Pipeline.makeJob(read: read, states: c.states, cardName: c.name, driveRoot: drive.path, camera: c.primaryCamera?.identity,
+        var job = Pipeline.makeJob(read: read, states: c.states, proved: c.proved, cardName: c.name, driveRoot: drive.path, camera: c.primaryCamera?.identity,
                                    destination: destination, probe: c.probe, index: drive.index)
         job.dirsToCreate = extraFolders + job.dirsToCreate
         return job
@@ -531,8 +574,16 @@ struct RememberedProof {
         Task { await self.run(c) }
     }
 
+    /// All a job leaves behind, worked out off the main thread.
+    private struct Finished: Sendable {
+        var outcome: IngestOutcome
+        var states: [String: FileState], proved: [String: Proof], issues: [CardIssue], verdict: CardVerdict
+        var manifestNote: CardIssue?
+    }
+
     private func run(_ c: CardSession) async {
-        guard let drive = workingDrive, let read = c.read, let destination = c.pendingDestination else {
+        // The job waited its turn, so it goes to the drive it was set up for, or nowhere.
+        guard let drive = workingDrive, c.provedOn === drive, drive.isCurrent, let read = c.read, let destination = c.pendingDestination else {
             c.error = "Plug in your working drive to carry on."
             c.phase = .stopped
             queueRunning = false
@@ -546,16 +597,29 @@ struct RememberedProof {
         c.phase = .copying
         c.startedAt = Date()
         askForNotifications()
-        let ledger = drive.ledger, control = c.control
+        let ledger = drive.ledger, control = c.control, root = drive.path, before = c.states, proved = c.proved, wasWeak = c.weak, probed = c.probe.issues
         let ticker = trackBytes(of: c)
         defer { ticker.cancel() }
-        let result: Result<IngestOutcome, Error> = await Task.detached(priority: .userInitiated) {
+        let result: Result<Finished, Error> = await Task.detached(priority: .userInitiated) {
             let throttle = Throttle()
             return Result {
-                try IngestEngine.run(job: job, ledger: ledger, control: control) { p in
+                let out = try IngestEngine.run(job: job, ledger: ledger, control: control) { p in
                     guard throttle.ready() else { return }
                     Task { @MainActor in c.progress = p }
                 }
+                let states = before.merging(out.states) { _, new in new }
+                let proofs = proved.merging(out.proofs) { _, new in new }
+                let issues = Pipeline.settle(issues: probed, states: states, weak: wasWeak || out.weakVerification, driveRoot: root, ledger: ledger)
+                let end = Pipeline.conclude(read: read, states: states, proved: proofs, issues: issues, driveRoot: root, kind: Self.kind)
+                var note: CardIssue?
+                if out.failures.isEmpty && !out.cancelled && !job.items.isEmpty {
+                    do {
+                        if !(try Pipeline.writeManifest(job: job, states: end.states, read: read)) {
+                            note = CardIssue(severity: .note, code: "mhl.card-history", message: "This card keeps its own checksum history, copied as it was.")
+                        }
+                    } catch { note = CardIssue(severity: .note, code: "mhl.write", message: "The checksum manifest couldn't be saved. The copy itself is fine.") }
+                }
+                return Finished(outcome: out, states: end.states, proved: proofs, issues: end.issues, verdict: end.verdict, manifestNote: note)
             }
         }.value
 
@@ -563,31 +627,21 @@ struct RememberedProof {
         case .failure(let e):
             c.error = e.localizedDescription
             c.phase = .ready
-        case .success(let out):
-            for (k, v) in out.states { c.states[k] = v }
-            c.keepProof(of: out.states, read: read)
+        case .success(let done):
+            let out = done.outcome
+            c.proved = done.proved
             if out.weakVerification { c.weak = true }
-            c.provedDriveKey = drive.volume.key
-            remember(proofOf: c)
-            c.issues = Pipeline.settle(issues: c.probe.issues, states: c.states, weak: c.weak, driveRoot: drive.path)
-            let (v, states) = Pipeline.conclude(read: read, states: c.states, issues: c.issues, driveRoot: drive.path, kind: Self.kind)
-            c.states = states
-            c.verdict = v
-            if out.failures.isEmpty && !out.cancelled && !job.items.isEmpty {
-                do {
-                    if !(try Pipeline.writeManifest(job: job, states: states, read: read)) {
-                        c.issues.append(CardIssue(severity: .note, code: "mhl.card-history", message: "This card keeps its own checksum history, copied as it was."))
-                    }
-                } catch { c.issues.append(CardIssue(severity: .note, code: "mhl.write", message: "The checksum manifest couldn't be saved. The copy itself is fine.")) }
-            }
-            c.existingHome = CardMatcher.existingHome(states: states, files: read.listing.files)
-            let driveGone = !FileManager.default.fileExists(atPath: drive.path)
+            c.states = done.states
+            c.issues = done.issues + (done.manifestNote.map { [$0] } ?? [])
+            c.verdict = done.verdict
+            c.existingHome = CardMatcher.existingHome(states: done.states, files: read.listing.files)
+            let driveGone = !drive.isCurrent
             if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish." }
             if out.cancelled || driveGone { c.phase = .stopped }
             else if c.isSafe || c.isHold { c.phase = .finished }
             else { c.phase = .ready }
-            remember(c, job: job, drive: drive, outcome: v)
-            if c.isSafe || c.isHold { announce(c, drive: drive) }
+            remember(c, job: job, drive: drive, outcome: done.verdict)
+            if c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
             else if !out.cancelled { notify(title: "\(c.name) needs a look", body: "Some files didn't copy. Don't format it.") }
             refreshIndex(drive)
         }
@@ -608,10 +662,12 @@ struct RememberedProof {
         start(c, destination: d, extraFolders: c.extraFolders)
     }
 
-    /// Re-reads a card whose contents changed under us.
+    /// Reads a card and its copy again from the start. Someone asked, so nothing is carried over from before.
     func recheck(_ c: CardSession) {
+        guard !c.isBusy else { return }
         c.control.reset()
         c.error = nil
+        c.forgetDrive()
         c.phase = .reading(done: 0, total: 0)
         Task { await self.readCard(c) }
     }
@@ -665,7 +721,7 @@ struct RememberedProof {
     }
 
     private func announce(_ c: CardSession, drive: DriveState) {
-        if c.isSafe {
+        if c.isSafe(on: drive) {
             notify(title: "\(c.name) is safe to format", body: "\(drive.name) and the card were both read in full, and they match.")
         } else {
             notify(title: "\(c.name) is copied, but needs a look", body: c.issues.first?.message ?? "Check it before formatting.")
@@ -717,12 +773,15 @@ struct RememberedProof {
 
     // MARK: Setup
 
-    func accept(setup: DriveSetup, for d: DriveState) {
+    /// Nil when it's saved. Otherwise, what went wrong and what to do about it.
+    func accept(setup: DriveSetup, for d: DriveState) -> String? {
+        guard setup.staysOnDrive else { return "A folder name in this layout would lead off \(d.name). Change it and try again." }
         do { try stores.save(setup: setup, onDrive: d.path) }
-        catch { return }
+        catch { return "Couldn't save to \(d.name): \(error.localizedDescription) Check it can be written to and has room, then try again." }
         d.setup = setup
         if let i = d.index { d.install(index: i) }
         use(drive: d)
+        return nil
     }
 
     var isCopying: Bool { cards.contains { $0.isBusy } }

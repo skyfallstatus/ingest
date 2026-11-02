@@ -143,7 +143,7 @@ private struct DrivesPage: View {
                 PlainRow(title: "No drive plugged in", subtitle: "Plug in your working drive.")
             }
             ForEach(model.drives) { d in
-                PlainRow(title: d.name, subtitle: "\(d.volume.freeText) · \(d.volume.fsType)\(model.workingDrive === d ? " · Working drive" : "")") {
+                PlainRow(title: model.label(of: d), subtitle: "\(d.volume.freeText) · \(d.volume.fsType)\(model.workingDrive === d ? " · Working drive" : "")") {
                     if model.workingDrive !== d {
                         Button("Use") {
                             model.use(drive: d)

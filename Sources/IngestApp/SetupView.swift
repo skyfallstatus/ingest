@@ -85,7 +85,7 @@ struct WaitingForDrive: View {
                 } else {
                     ForEach(model.drives) { d in
                         HStack(spacing: 8) {
-                            Text(d.name).font(.body13).kerning(-0.08).lineLimit(1)
+                            Text(model.label(of: d)).font(.body13).kerning(-0.08).lineLimit(1)
                             Spacer(minLength: 0)
                             Text(d.volume.freeText).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(1)
                             Button("Use This") { pick(d) }.buttonStyle(ActionStyle(kind: .quiet, small: true))
@@ -214,8 +214,7 @@ struct SetupView: View {
             .padding(.horizontal, Grid.side).padding(.bottom, 10)
             Foot(bottom: footLine) {
                 Button("Use This") {
-                    model.accept(setup: setup, for: drive)
-                    if drive.setup == nil { saveError = "Couldn't save to \(drive.name)." } else { close() }
+                    if let why = model.accept(setup: setup, for: drive) { saveError = why } else { close() }
                 }
                 .buttonStyle(ActionStyle())
                 .keyboardShortcut(.defaultAction)

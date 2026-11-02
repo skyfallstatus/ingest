@@ -7,6 +7,9 @@ public struct Preset: Hashable, Sendable {
 }
 
 public enum ShootPlanner {
+    /// A card's folder name, short enough to take a number or a code after it and keep it.
+    public static func cardLabel(_ name: String) -> String { SafeName.cap(name, maxBytes: SafeName.maxBytes - 40) }
+
     private static let pathJoiner = " \u{203A} "
 
     // MARK: Names
@@ -176,6 +179,7 @@ public enum ShootPlanner {
         }
 
         /// The folder a card lands in. Cards never share a folder, even when the camera reported no reel.
+        /// `cardLabel` leaves the room a number needs, so a long reel name can't cut its own number off.
         func cardFolder(under parent: String, parentExists: Bool, prefix: String) -> String {
             let reelText = SafeName.clean(request.cardFolder)
             if !reelText.isEmpty {

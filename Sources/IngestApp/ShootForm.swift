@@ -127,21 +127,29 @@ struct FieldBox<Field: View, Trailing: View>: View {
     }
 
     private var baseCardFolder: String {
-        if let reel = card.probe.reel, !reel.isEmpty { return reel }
+        if let reel = card.probe.reel, !reel.isEmpty { return ShootPlanner.cardLabel(reel) }
         let n = CardSession.friendlyName(card.volume.name)
-        return n == "Card" ? "Card 1" : n
+        return n == "Card" ? "Card 1" : ShootPlanner.cardLabel(n)
     }
 
-    /// A card never lands on top of another card with the same name, because clip names repeat.
+    /// A card never lands on top of another card with the same name, because clip names repeat. That includes a card
+    /// still waiting in line, whose folder isn't on the drive yet.
     private func uniqueCardFolder() -> String {
         let base = baseCardFolder
-        for n in 1..<100 {
-            let name = n == 1 ? base : "\(base) \(n)"
+        let taken = model.reserved(besides: card)
+        func free(_ name: String) -> Bool {
             let p = ShootPlanner.plan(setup: setup, request: request(cardFolder: name), clients: drive.clients) { drive.existing($0) }
             // Footage, stills and audio each get the same card folder, so all of them must be free.
-            if [p.footagePath, p.stillsPath, p.audioPath].compactMap({ $0 }).allSatisfy({ drive.existing($0) == nil }) { return name }
+            return [p.footagePath, p.stillsPath, p.audioPath].compactMap { $0 }.allSatisfy { drive.existing($0) == nil && !taken.contains(matchKey($0)) }
         }
-        return base + " " + UUID().uuidString.prefix(4)
+        for n in 1..<100 {
+            let name = n == 1 ? base : "\(base) \(n)"
+            if free(name) { return name }
+        }
+        while true {
+            let name = base + " " + UUID().uuidString.prefix(8)
+            if free(name) { return name }
+        }
     }
 
     var plan: ShootPlan {

@@ -8,7 +8,12 @@ public enum CardVerdict: Hashable, Sendable {
     case safe
 }
 
-enum Verdict {
+public enum Verdict {
+    /// With no drive there's nothing to prove against, so the card's own listing is all this can speak to.
+    public static func withoutDrive(read: CardRead, issues: [CardIssue]) -> CardVerdict {
+        evaluate(listing: read.listing, unreadable: read.unreadable, states: [:], issues: issues, cardUnchanged: true)
+    }
+
     /// Green requires all of it:
     /// the listing finished with no errors, every listed file opened, every file was proved identical by reading
     /// both sides, nothing is a blocker, and the card still lists exactly what was verified.

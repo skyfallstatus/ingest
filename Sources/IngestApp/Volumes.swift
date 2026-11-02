@@ -12,7 +12,9 @@ struct Volume: Identifiable, Hashable, Sendable {
     var fsType: String
     var isReadOnly: Bool
     var isInternal: Bool
+    var anchor: MountAnchor? = nil      // this mount. Dead once it's unmounted, whatever comes back at this path.
     var id: String { path }
+    var isCurrent: Bool { anchor?.isCurrent == true }
 
     /// Stable enough to remember a drive by. UUIDs are only a hint on exFAT, so the name and size count too.
     var key: String { "\(uuid ?? "-")|\(name)|\(total)" }
@@ -72,22 +74,24 @@ final class VolumeWatcher: @unchecked Sendable {
             let uuid = v.volumeUUIDString.flatMap { $0.hasPrefix("00000000-0000-0000-0000") ? nil : $0 }
             out.append(Volume(path: path, name: v.volumeName ?? url.lastPathComponent, uuid: uuid,
                               total: UInt64(v.volumeTotalCapacity ?? 0), free: UInt64(v.volumeAvailableCapacity ?? 0),
-                              fsType: type, isReadOnly: v.volumeIsReadOnly ?? false, isInternal: v.volumeIsInternal ?? false))
+                              fsType: type, isReadOnly: v.volumeIsReadOnly ?? false, isInternal: v.volumeIsInternal ?? false,
+                              anchor: MountAnchor(path: path)))
         }
         return out
     }
 
     static func role(of v: Volume, overrides: [String: String]) -> VolumeRole {
+        if overrides[v.key] == "ignore" { return .ignored }
+        let url = URL(fileURLWithPath: v.path)
+        // A denied permission looks exactly like an empty volume. Never treat it as one. This is also the read that can
+        // wait on a permission prompt, so it stays first, off the main thread, whatever's been chosen for this volume.
+        guard let dir = opendir(v.path), v.anchor != nil else { return .unreadable }
+        closedir(dir)
         switch overrides[v.key] {
         case "card": return .card
         case "drive": return .drive
-        case "ignore": return .ignored
         default: break
         }
-        let url = URL(fileURLWithPath: v.path)
-        // A denied permission looks exactly like an empty volume. Never treat it as one.
-        guard let dir = opendir(v.path) else { return .unreadable }
-        closedir(dir)
         if FileManager.default.fileExists(atPath: v.path + "/" + AppInfo.driveFolder + "/setup.json") { return .drive }
         if FileManager.default.fileExists(atPath: v.path + "/Backups.backupdb") { return .ignored }
         switch CardProber.look(atRoot: url) {

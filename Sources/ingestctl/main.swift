@@ -76,8 +76,8 @@ case "match":
                                        control: IngestControl(), record: false, progress: { _, _ in })
     for (k, v) in checked.states { states[k] = v }
     let probe = CardProber.probe(root: URL(fileURLWithPath: root), files: read.listing.files, focus: nil)
-    let issues = Pipeline.settle(issues: probe.issues, states: states, weak: checked.weak, driveRoot: drive)
-    let (verdict, final) = Pipeline.conclude(read: read, states: states, issues: issues, driveRoot: drive, kind: kind)
+    let issues = Pipeline.settle(issues: probe.issues, states: states, weak: checked.weak, driveRoot: drive, ledger: ledger)
+    let (verdict, final, _) = Pipeline.conclude(read: read, states: states, proved: checked.proofs, issues: issues, driveRoot: drive, kind: kind)
     print(tally(final))
     print(verdictLine(verdict))
     exit(verdict == .safe ? 0 : 1)
@@ -96,7 +96,7 @@ case "ingest":
     for (k, v) in confirmed.states { states[k] = v }
     let focus = Set(read.listing.files.map(\.relPath).filter { if case .verified? = states[$0] { false } else { true } })
     let probe = CardProber.probe(root: URL(fileURLWithPath: root), files: read.listing.files, focus: focus)
-    let job = Pipeline.makeJob(read: read, states: states, cardName: (root as NSString).lastPathComponent, driveRoot: drive,
+    let job = Pipeline.makeJob(read: read, states: states, proved: confirmed.proofs, cardName: (root as NSString).lastPathComponent, driveRoot: drive,
                                camera: probe.cameras.first?.identity, destination: Destination(footageRoot: dest), probe: probe, index: index)
     let out: IngestOutcome
     do {
@@ -105,8 +105,9 @@ case "ingest":
     for (k, v) in out.states { states[k] = v }
     if !out.cancelled && out.failures.isEmpty && !job.items.isEmpty { try? Pipeline.writeManifest(job: job, states: states, read: read) }
     let weak = confirmed.weak || out.weakVerification
-    let issues = Pipeline.settle(issues: probe.issues, states: states, weak: weak, driveRoot: drive)
-    let (verdict, final) = Pipeline.conclude(read: read, states: states, issues: issues, driveRoot: drive, kind: kind)
+    let issues = Pipeline.settle(issues: probe.issues, states: states, weak: weak, driveRoot: drive, ledger: ledger)
+    let proofs = confirmed.proofs.merging(out.proofs) { _, new in new }
+    let (verdict, final, _) = Pipeline.conclude(read: read, states: states, proved: proofs, issues: issues, driveRoot: drive, kind: kind)
     print("after:", tally(final), "cancelled:", out.cancelled, "weak:", weak)
     print(verdictLine(verdict))
 

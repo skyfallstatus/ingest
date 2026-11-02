@@ -60,6 +60,14 @@ public struct DriveSetup: Codable, Hashable, Sendable {
     public init(path: [PathLevel], shootName: ShootNameStyle, inner: [InnerFolder], footage: FootageStyle, learned: LearnedStats? = nil) {
         self.path = path; self.shootName = shootName; self.inner = inner; self.footage = footage; self.learned = learned
     }
+
+    /// A setup is a file on a drive, or text someone typed, so every level has to be one folder name that stays on it.
+    public var staysOnDrive: Bool {
+        func single(_ name: String) -> Bool { !name.isEmpty && !name.contains("/") && Ledger.isInsideDrive(name) }
+        func all(_ folders: [InnerFolder]) -> Bool { folders.allSatisfy { single($0.name) && all($0.children) } }
+        let literals = path.allSatisfy { if case .literal(let name) = $0 { single(name) } else { true } }
+        return literals && all(inner)
+    }
 }
 
 /// What someone typed to name a shoot.

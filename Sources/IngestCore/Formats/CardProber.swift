@@ -25,6 +25,11 @@ public enum CardProber {
         return result
     }
 
+    /// What the device a card sits on is reporting now. Worth asking again after a full read, which is what raises it.
+    public static func deviceIssues(root: String, files: [CardFile]) -> [CardIssue] {
+        Completeness.codex(CardContext(root: URL(fileURLWithPath: root), files: files))
+    }
+
     /// Classifies a card-relative path. Pure, and cheap enough for every file on a card.
     public static func kind(ofRelativePath path: String) -> FileKind { FileKinds.kind(path) }
 

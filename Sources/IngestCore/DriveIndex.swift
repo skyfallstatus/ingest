@@ -32,7 +32,7 @@ public final class DriveIndex: @unchecked Sendable {
         var folders = 0
         walkTree(root) { e, rel in
             let name = (rel as NSString).lastPathComponent
-            if name.hasPrefix("._") || name == ".DS_Store" || name.hasPrefix(".ingest-") { return 0 }
+            if name.hasPrefix("._") || name == ".DS_Store" { return 0 }
             if e.type == Int32(CI_ENTRY_DIR) {
                 if Junk.isJunk(name: name, depth: Int(e.depth), isDir: true) || (e.depth == 1 && name == AppInfo.driveFolder) { return 1 }
                 folders += 1
@@ -70,7 +70,10 @@ public final class DriveIndex: @unchecked Sendable {
         guard let d = try? Data(contentsOf: url, options: .mappedIfSafe), d.count >= 12 else { return nil }
         return d.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> DriveIndex? in
             guard raw.loadUnaligned(as: UInt32.self) == magic else { return nil }
-            let count = Int(raw.loadUnaligned(fromByteOffset: 4, as: UInt64.self))
+            // A damaged cache is rebuilt, so a count no file this size could hold is simply refused.
+            let claimed = raw.loadUnaligned(fromByteOffset: 4, as: UInt64.self)
+            guard claimed <= UInt64((raw.count - 12) / 19) else { return nil }
+            let count = Int(claimed)
             var off = 12
             var out: [DriveEntry] = []
             out.reserveCapacity(count)

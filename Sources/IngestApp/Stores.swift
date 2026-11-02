@@ -36,7 +36,8 @@ final class Stores {
     }
 
     var indexCacheFolder: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(AppInfo.bundleID, isDirectory: true)
+        if ProcessInfo.processInfo.environment["INGEST_SUPPORT_DIR"] != nil { return support.appendingPathComponent("index", isDirectory: true) }
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(AppInfo.bundleID, isDirectory: true)
     }
 
     var allowDiskImages: Bool {
@@ -89,14 +90,15 @@ final class Stores {
 
     // MARK: Drive setup lives on the drive, so it travels with it
 
-    func setup(onDrive path: String) -> DriveSetup? {
+    /// A setup that would lead off the drive counts as no setup at all.
+    static func setup(onDrive path: String) -> DriveSetup? {
         FileManager.default.contents(atPath: path + "/" + AppInfo.driveFolder + "/setup.json")
             .flatMap { try? JSONDecoder().decode(DriveSetup.self, from: $0) }
+            .flatMap { $0.staysOnDrive ? $0 : nil }
     }
 
     func save(setup: DriveSetup, onDrive path: String) throws {
-        let folder = path + "/" + AppInfo.driveFolder
-        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let folder = try Ledger.appFolder(on: path)
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(setup).write(to: URL(fileURLWithPath: folder + "/setup.json"), options: .atomic)
     }

@@ -170,6 +170,7 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
         panel.makeKeyAndOrderFront(nil)
         item.button?.highlight(true)
         if !model.unreadable.isEmpty { Task { await model.refresh() } }
+        model.lookAgain()
         if model.checksForUpdates, !model.isDemo { model.updates.checkIfDue() }
     }
 

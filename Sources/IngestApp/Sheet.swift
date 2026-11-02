@@ -18,7 +18,7 @@ enum LineMark: Equatable {
 }
 
 enum LineAction: Hashable {
-    case resume, copyAgain(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, useDrive(String), setUpDrive(String)
+    case resume, copyAgain(Int), checkAgain, chooseFolder, showInFinder(String?), notACard, useDrive(id: String, name: String), setUpDrive(id: String, name: String)
 
     var title: String {
         switch self {
@@ -28,8 +28,8 @@ enum LineAction: Hashable {
         case .chooseFolder: "Choose Folder…"
         case .showInFinder: "Show in Finder"
         case .notACard: "Not a Card"
-        case .useDrive(let name): "Use \(name)"
-        case .setUpDrive(let name): "Set Up \(name)…"
+        case .useDrive(_, let name): "Use \(name)"
+        case .setUpDrive(_, let name): "Set Up \(name)…"
         }
     }
 
@@ -318,7 +318,7 @@ struct CardSheet: Equatable {
             line.label = "On your drive"
             if c.read != nil, !s.working {
                 line.detail = [unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on."]
-                line.actions = unset.map { .useDrive($0.name) }
+                line.actions = unset.map { .useDrive(id: $0.id, name: s.model.label(of: $0)) }
             }
             return line
         }
@@ -355,10 +355,13 @@ struct CardSheet: Equatable {
         }
         show(s.settledFiles, s.verifiedBytes)
         if s.working { return line }
-        if s.everythingProved { line.mark = .done }
+        if s.everythingProved {
+            line.mark = .done
+            if s.shortDrive != s.driveName { line.detail = [s.driveName] }  // whatever the line had room for, the name is said
+        }
         if drive.setup == nil, !s.hasDestination, s.toGo > 0 {
             line.detail = ["\(drive.name) isn't set up yet."]
-            line.actions = [.setUpDrive(drive.name)]
+            line.actions = [.setUpDrive(id: drive.id, name: s.model.label(of: drive))]
         } else if let e = s.nameError {
             line.mark = .failed
             line.detail = [e]
@@ -506,7 +509,8 @@ struct MenuBarState: Equatable {
         case .safe:
             if !model.unreadable.isEmpty { return MenuBarState(word: "Can't read", spoken: "\(AppInfo.name) can't read a volume", twoCards: several) }
             if !model.maybeCards.isEmpty { return MenuBarState(word: "A card?", spoken: "\(AppInfo.name) has a question about a volume", twoCards: several) }
-            return MenuBarState(word: "Safe to format", spoken: several ? "All \(total) cards are safe to format" : "\(name) is safe to format", isSafe: true, twoCards: several)
+            let onDrive = drive.map { " on \($0)" } ?? ""
+            return MenuBarState(word: "Safe to format", spoken: several ? "All \(total) cards are safe to format\(onDrive)" : "\(name) is safe to format\(onDrive)", isSafe: true, twoCards: several)
         case .look:
             return MenuBarState(word: "Have a look", spoken: "Don't format \(name). It needs a look.", twoCards: several)
         case .failed:
@@ -522,7 +526,8 @@ struct MenuBarState: Equatable {
             case .checking: word = "Checking"
             case .copying, .queued: word = worst.filesToGo == 0 ? "Checking" : "\(worst.filesToGo) left"
             case .stopped: word = "Stopped"
-            default: word = several ? "\(total) cards" : drive.map { "Not on \($0)" } ?? "No drive"
+            // A menu bar that's out of room hides the item, so a long name stays out of it.
+            default: word = several ? "\(total) cards" : drive.map { $0.count > 16 ? "Not on drive" : "Not on \($0)" } ?? "No drive"
             }
             return MenuBarState(word: word, spoken: "Don't format \(name). \(sheet.bottom.sentence)", twoCards: several)
         }

@@ -18,10 +18,11 @@ public struct CardListing: Sendable {
     }
     public var totalBytes: UInt64 { files.reduce(0) { $0 + $1.size } }
 
-    /// Same files, same sizes? Used to prove the card didn't change while it was being copied.
+    /// Same files, same sizes, same modified times? Used to prove the card didn't change while it was being copied.
+    /// A changed time is reason enough to doubt a file. A matching one proves nothing.
     func sameContents(as other: CardListing) -> Bool {
         guard files.count == other.files.count, errors == other.errors else { return false }
-        func key(_ f: CardFile) -> String { "\(f.relPath)|\(f.size)" }
+        func key(_ f: CardFile) -> String { "\(f.relPath)|\(f.size)|\(f.mtime).\(f.mtimeNanos)" }
         return Set(files.map(key)) == Set(other.files.map(key))
     }
 }

@@ -84,7 +84,7 @@ import SwiftUI
         check("no drive: the card stops and waits", await until(60, "ready") { first.phase == .ready }, marks(first, model))
         var list = CardSheet.make(first, model: model)
         check("no drive: says so", list.bottom.title == "Don't format" && list.bottom.sentence.contains("Choose a working drive"), list.bottom.sentence)
-        check("no drive: offers the next step", list.line(.drive)?.actions == [.useDrive(driveName)], "\(list.line(.drive)?.actions ?? [])")
+        check("no drive: offers the next step", list.line(.drive)?.actions == [.useDrive(id: drive.id, name: driveName)], "\(list.line(.drive)?.actions ?? [])")
         check("no drive: no form to fill in", !list.showsNaming)
         shot(PanelView(), "no-drive", out, model)
 
@@ -96,8 +96,9 @@ import SwiftUI
         while !scanned.done { try? await Task.sleep(for: .milliseconds(1)) }
         shot(ReadingDrive(drive: drive) {}, "reading-drive", out, model)
         check("reads the drive and counts folders", drive.foldersRead > 0, "\(drive.foldersRead) folders")
+        _ = await until(20, "compared") { first.phase == .ready && !first.isMatching }    // a new drive starts from nothing
         list = CardSheet.make(first, model: model)
-        check("drive not set up: says so and offers it", list.line(.drive)?.actions == [.setUpDrive(driveName)], "\(list.line(.drive)?.detail ?? [])")
+        check("drive not set up: says so and offers it", list.line(.drive)?.actions == [.setUpDrive(id: drive.id, name: driveName)], "\(list.line(.drive)?.detail ?? [])")
 
         // What the drive taught us
         let learned = LayoutLearner.learn(entries: drive.index?.entries ?? [])
@@ -274,7 +275,7 @@ import SwiftUI
         hdiutil(["detach", card.volume.path])
         check("safe card out: the session goes", await until(20, "gone") { model.cards.isEmpty })
 
-        // Back in, in the same run of the app: proved a moment ago, so it isn't read again.
+        // Back in. Proof doesn't survive a card leaving the Mac, however recently it was proved.
         sawCheck = false
         let watchingRemount = Task { @MainActor in
             while !Task.isCancelled {
@@ -285,13 +286,12 @@ import SwiftUI
         hdiutil(["attach", image])
         check("remount: runs to Safe unaided", await until(120, "safe") { model.cards.first?.isSafe(on: drive) == true && model.cards.first?.phase == .finished })
         watchingRemount.cancel()
-        check("remount: this run's proof stands, nothing read again", !sawCheck)
+        check("remount: nothing is taken on trust, it's all read again", model.cards.first?.control.bytesChecked == model.cards.first?.totalBytes, "\(model.cards.first?.control.bytesChecked ?? 0) of \(model.cards.first?.totalBytes ?? 0) bytes")
         bar.hide()
         hdiutil(["detach", card.volume.path])
         _ = await until(20, "gone") { model.cards.isEmpty }
 
-        // A later run of the app knows nothing of that: the ledger is only a hint, so it all gets read.
-        model.forgetProofs()
+        // The ledger is only a hint, so it all gets read.
         seen = []; sawRead = false; sawCheck = false
         let watching2 = Task { @MainActor in
             while !Task.isCancelled {
@@ -351,14 +351,14 @@ import SwiftUI
 
         // Several cards: the worst one, and a count
         func staged(_ name: String, verified: Bool) -> CardSession {
-            let c = CardSession(volume: Volume(path: "/tmp/none-" + name, name: name, uuid: nil, total: 1, free: 1, fsType: "exfat", isReadOnly: false, isInternal: false))
+            let c = CardSession(volume: Volume(path: "/tmp/none-" + name, name: name, uuid: nil, total: 1, free: 1, fsType: "exfat", isReadOnly: false, isInternal: false, anchor: MountAnchor(path: "/tmp")))
             c.read = again.read
             if verified, let files = again.read?.listing.files {
                 for f in files { c.states[f.relPath] = .verified(drivePath: "x", hash: "0") }
             }
             c.verdict = verified ? .safe : .notSafe(remaining: c.totalFiles, total: c.totalFiles, reasons: [])
             c.phase = verified ? .finished : .ready
-            c.provedDriveKey = drive.volume.key
+            c.provedOn = drive
             return c
         }
         let green = staged("A", verified: true), unsafe = staged("B", verified: false)
@@ -552,10 +552,22 @@ import SwiftUI
         check("two cards: both in History", model.history.prefix(2).map(\.cardName).contains(second.name), model.history.prefix(2).map(\.cardName).joined(separator: ", "))
 
         // A changed file on the drive can't pass, whatever the ledger remembers
-        unlink(large)
         guard let first = model.cards.first(where: { $0.volume.name == cardName }), let drive = model.workingDrive else { return }
         let clip = first.read?.listing.files.filter { $0.kind == .video }.max { $0.size < $1.size }
         guard let clip, case .verified(let copy, _, _)? = first.states[clip.relPath] else { check("tamper: a proved clip to change", false); return }
+
+        // With everything still plugged in, the proof ends with the file it was about, and looking is enough to find out
+        _ = await until(20, "settled") { !first.isMatching && !drive.isScanning }
+        check("changed in place: starts from Safe", first.isSafe(on: drive), "\(String(describing: first.verdict))")
+        if let h = FileHandle(forUpdatingAtPath: drive.path + "/" + copy) {
+            try? h.seek(toOffset: clip.size / 2)
+            h.write(Data("first".utf8))
+            try? h.close()
+        } else { check("changed in place: the copy opens", false, copy) }
+        model.lookAgain()
+        check("changed in place: the green goes", await until(20, "green gone") { !first.isSafe(on: drive) } && first.states[clip.relPath] == .missing, "\(String(describing: first.verdict))")
+
+        unlink(large)
         hdiutil(["detach", first.volume.path])
         _ = await until(20, "gone") { stale(model, cardName) == nil }
         if let h = FileHandle(forUpdatingAtPath: drive.path + "/" + copy) {
@@ -563,7 +575,6 @@ import SwiftUI
             h.write(Data("changed".utf8))
             try? h.close()
         } else { check("tamper: the copy opens", false, copy) }
-        model.forgetProofs()
         hdiutil(["attach", cardImage])
         _ = await until(20, "back") { stale(model, cardName) != nil }
         guard let last = stale(model, cardName) else { check("tamper: the card goes back in", false); return }

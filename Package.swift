@@ -10,5 +10,6 @@ let package = Package(
         .executableTarget(name: "ingestctl", dependencies: ["IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "IngestApp", dependencies: ["IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .testTarget(name: "IngestCoreTests", dependencies: ["IngestCore", "CIngest"], swiftSettings: [.swiftLanguageMode(.v5)]),
+        .testTarget(name: "IngestAppTests", dependencies: ["IngestApp", "IngestCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
     ]
 )

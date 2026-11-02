@@ -43,6 +43,12 @@ import IngestCore
         return main
     }
 
+    /// Opening the app again from Applications. A full menu bar can hide the mark, and this is the way back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Windows.shared.bar?.openForUser()
+        return false
+    }
+
     /// Every way of quitting lands here, Cmd+Q included.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         Windows.shared.mayQuit(model: Self.model) ? .terminateNow : .terminateCancel

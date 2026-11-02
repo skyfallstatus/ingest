@@ -771,7 +771,7 @@ private final class Dying: @unchecked Sendable {
         let otherVolume = volume(other, "OTHER")
         w.plugged.now = [(w.cardVolume, .card), (otherVolume, .card), (w.driveA, .drive)]
         await w.model.refresh()
-        w.model.use(drive: w.drive(w.driveA))
+        #expect(w.model.accept(setup: ShootPlanner.presets()[0].setup, for: w.drive(w.driveA)) == nil)     // a set-up drive is chosen again at once
         let c = try #require(w.model.cards.first { $0.volume.path == w.card })
         let o = try #require(w.model.cards.first { $0 !== c })
         await w.until("both cards") { o.phase == .ready && !o.isMatching && c.phase == .ready && !c.isMatching }

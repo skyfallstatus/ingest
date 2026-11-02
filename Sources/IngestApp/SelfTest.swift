@@ -121,7 +121,7 @@ import SwiftUI
         hdiutil(["detach", first.volume.path])
         check("card out: its session goes", await until(20, "card gone") { model.cards.isEmpty })
         check("card out: the panel isn't open yet", !bar.panel.isVisible)
-        check("menu bar: quiet with no card", bar.state.word.isEmpty, bar.state.word)
+        check("menu bar: quiet with no card", await until(2, "quiet") { bar.state.word.isEmpty }, bar.state.word)
         let inFront = frontmost
         var seen: Set<String> = []
         var sawRead = false, sawCheck = false
@@ -185,7 +185,8 @@ import SwiftUI
         check("it hangs from its mark, right edges together", abs(bar.panel.frame.maxX - StatusBar.margin.right - mark.maxX) <= 9 && bar.panel.frame.maxY - StatusBar.margin.top <= mark.minY, "\(bar.panel.frame) under \(mark)")
         check("no title bar, no Dock icon", bar.panel.styleMask.contains(.borderless) && NSApp.activationPolicy() == .accessory)
         check("widget width", bar.panel.frame.width - StatusBar.margin.left - StatusBar.margin.right == Grid.width)
-        check("the app in front still stays in front", !weAreFrontmost && frontmost == inFront)
+        check("the app in front still stays in front", !weAreFrontmost && frontmost == inFront,
+              "we're in front \(weAreFrontmost), now \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none") \(frontmost ?? 0), was \(inFront ?? 0)")
         check("focus lands in the shoot form", await until(2, "focus") { bar.panel.firstResponder is NSTextView }, "\(bar.panel.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "nothing")")
 
         // Shoot row, with real key presses

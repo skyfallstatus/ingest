@@ -64,7 +64,10 @@ struct DiskImageTests {
         #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive, kind: kind).verdict == .safe)
         image.detach()
         image.attach()
-        #expect(ResolvedRoot(drive)?.stamp("S/C0001.MP4") == stamped, "nothing on the file gives it away, which is why the mount has to")
+        // Only the file: a device number can change across mounts if another image attaches, and nothing relies on it.
+        let after = ResolvedRoot(drive)?.stamp("S/C0001.MP4")
+        #expect(after?.inode == stamped?.inode && after?.size == stamped?.size && after?.mtime == stamped?.mtime && after?.mtimeNanos == stamped?.mtimeNanos,
+                "nothing on the file gives it away, which is why the mount has to")
         #expect(Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive, kind: kind).verdict != .safe)
     }
 

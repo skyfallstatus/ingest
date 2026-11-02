@@ -15,8 +15,15 @@ func withFaults<T>(noMap: String? = nil, badDir: String? = nil, reserving: (@con
     return try body()
 }
 
+/// Everything a run makes goes in one folder, and goes with the run. A suite leaves nothing on the Mac.
+private let scratch: String = {
+    let p = NSTemporaryDirectory() + "ingest-tests-" + UUID().uuidString
+    atexit { try? FileManager.default.removeItem(atPath: scratch) }
+    return p
+}()
+
 func temp() -> String {
-    let p = NSTemporaryDirectory() + "ingest-test-" + UUID().uuidString
+    let p = scratch + "/" + UUID().uuidString
     try! FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
     return p
 }

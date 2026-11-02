@@ -15,7 +15,7 @@ W=$(mktemp -d /tmp/ingest-dmg.XXXXXX)
 MOUNT=""
 detach() {
   [ -n "$MOUNT" ] && hdiutil detach -quiet "$MOUNT" 2>/dev/null || true
-  rm -f "$W/rw.dmg"
+  rm -rf "$W"
 }
 trap detach EXIT
 

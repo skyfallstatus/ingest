@@ -126,7 +126,7 @@ Your cards are never written to.
 
 ## Building and testing
 
-You need Swift 6.2 or later. Command Line Tools are enough, and Xcode isn't needed. There are no third-party dependencies.
+You need Swift 6.2 or later. Command Line Tools are enough, and Xcode isn't needed. There's one third-party dependency, [Sparkle](https://sparkle-project.org), which installs updates. SwiftPM fetches it, and its licence is in [NOTICE](NOTICE).
 
 ```sh
 swift build                       # everything

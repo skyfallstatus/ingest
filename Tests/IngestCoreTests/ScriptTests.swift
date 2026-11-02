@@ -97,7 +97,9 @@ private func executable(_ path: String, _ text: String) throws {
     #expect(licence.contains("Permission is hereby granted, free of charge"))
     #expect(try text("README.md").contains("MIT. See [LICENSE](LICENSE)"))
     #expect(try text("NOTICE").contains("Licensed under the MIT License"))
-    for rel in ["README.md", "NOTICE"] { #expect(try !text(rel).contains("All rights reserved"), "\(rel)") }
+    let ours = try text("NOTICE").components(separatedBy: "SPARKLE'S LICENCE").first ?? ""     // other people's words stay as they are
+    #expect(try !text("README.md").contains("All rights reserved"))
+    #expect(!ours.contains("All rights reserved"))
 }
 
 /// The real `scripts/test.sh` around a harmless command, with its own lock, so it can run inside a test run.

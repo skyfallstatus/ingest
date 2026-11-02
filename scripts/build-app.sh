@@ -28,6 +28,7 @@ BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 COMMIT=$(git describe --always --dirty 2>/dev/null || echo unknown)
 sed -e "s/__NAME__/$NAME/g" -e "s/__ID__/$ID/g" -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD/g" -e "s/__COMMIT__/$COMMIT/g" -e "s#__FEED__#$FEED#g" Resources/Info.plist > "$OUT/Contents/Info.plist"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$OUT/Contents/Resources/"
+cp LICENSE NOTICE "$OUT/Contents/Resources/"      # Sparkle's licence asks to go wherever Sparkle goes
 # Inside out, because each signature covers what's inside it.
 for inner in "$SPARKLE/Versions/B/Updater.app" "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE" "$OUT"; do
   if [ -n "$SIGN_ID" ]; then

@@ -469,6 +469,7 @@ private final class Dying: @unchecked Sendable {
         let c = await hubPulled(w)
         #expect(c.error?.contains("removed while copying") == true, "\(String(describing: c.error))")
         #expect(MenuBarState.make(w.model).word == "Card pulled")
+        #expect(w.model.notified.filter { $0.contains("Don't format") }.count == 1, "the card already said so: \(w.model.notified)")
         w.plugged.now = [(volume(w.a, "DRIVE-A"), .drive), (w.driveB, .drive)]
         await w.model.refresh()
         w.model.use(drive: w.model.drives.first { $0.path == w.a }!)
@@ -822,6 +823,7 @@ private final class Dying: @unchecked Sendable {
 
     @Test func `A saved drive turning up during a job doesn't take away what that job proved`() async throws {
         let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
         w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive)]
         await w.model.refresh()
         w.model.use(drive: w.drive(w.driveA))
@@ -829,10 +831,33 @@ private final class Dying: @unchecked Sendable {
         await w.until("the card to settle") { c.phase == .ready && !c.isMatching }
         w.model.stores.workingDriveKey = w.driveB.key       // the drive it would rather have, not plugged in yet
         w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
         w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()                             // seen while the job runs, so it has to wait
         await w.until("the copy") { !c.isBusy && c.phase == .finished }
         #expect(w.model.workingDrive?.path == w.a, "the card is Safe here, and nothing has looked since")
         #expect(c.isSafe(on: w.model.workingDrive))
+    }
+
+    @Test func `A drive that came back during a job is chosen when the job's done`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        w.plugged.now = [(w.cardVolume, .card), (w.driveA, .drive)]
+        await w.model.refresh()
+        w.model.use(drive: w.drive(w.driveA))
+        let c = w.model.cards[0]
+        await w.until("the card to settle") { c.phase == .ready && !c.isMatching }
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card)]
+        await w.model.refresh()
+        let back = volume(w.a, "DRIVE-A")
+        w.plugged.now = [(w.cardVolume, .card), (back, .drive)]
+        await w.model.refresh()                             // it can't be chosen while the job is still unwinding
+        #expect(c.isBusy, "the job has to be running for this to mean anything")
+        await w.until("the job to stop") { !c.isBusy }
+        await w.until("the drive to be chosen") { w.model.workingDrive?.path == w.a }
     }
 
     @Test func `Only a copy that's really bad is called bad`() async throws {

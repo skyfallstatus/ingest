@@ -681,7 +681,6 @@ import UserNotifications
             // The saved drive can be back already, and only waiting for the job that was unwinding.
             if workingDrive == nil, !drives.contains(where: { $0.volume.key == stores.workingDriveKey }) {
                 c.error = "Plug in your working drive to carry on."
-                c.driveWentAway = true
                 notify(title: "Don't format \(c.name)", body: "Your working drive went before this card was copied.")
             } else if c.driveWentAway { c.driveWentAway = false; c.error = nil }    // it's back, and Resume starts it
             c.phase = .stopped

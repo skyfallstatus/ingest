@@ -15,6 +15,46 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// Where the widget hangs: a screen, the widget's right edge and its top. Worked out once when it opens, then held, because
+/// macOS moves a status item's window to whichever display the pointer is on, up to a second later, open widget or not.
+struct WidgetSpot: Equatable {
+    struct Screen: Equatable { var frame: CGRect; var visible: CGRect }
+    var screen: Screen
+    var right: CGFloat
+    var top: CGFloat
+
+    /// An open widget keeps its spot for as long as its screen is there with the same frame. Otherwise, and on opening, it
+    /// hangs from `item` on `opening`. A word changing in the menu bar moves the item too, which is another reason to hold.
+    static func next(held: WidgetSpot?, isOpen: Bool, screens: [Screen], opening: Screen?, item: CGRect?, width: CGFloat) -> WidgetSpot? {
+        if isOpen, let held, let same = screens.first(where: { $0.frame == held.screen.frame }) {
+            return WidgetSpot(screen: same, right: held.right, top: held.top)
+        }
+        guard let screen = opening ?? screens.first else { return nil }
+        let v = screen.visible
+        let right = min(max(item?.maxX ?? v.maxX, v.minX + 8 + width), v.maxX - 8)
+        return WidgetSpot(screen: screen, right: right, top: min(item?.minY ?? v.maxY, v.maxY) - 6)
+    }
+
+    /// The screen a click landed on. The very top of the top display reads as just outside it.
+    static func screen(at p: NSPoint, in screens: [Screen]) -> Screen? {
+        screens.first { $0.frame.contains(p) } ?? screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(p) }
+    }
+
+    /// What a click hangs the widget from: the item's window if it's on that screen, and if it hasn't got there yet, the click.
+    static func item(window: CGRect?, on screen: Screen, click: NSPoint) -> CGRect {
+        if let window, window.intersects(screen.frame) { return window }
+        return CGRect(x: click.x - 8, y: screen.visible.maxY, width: 16, height: 0)
+    }
+
+    var room: CGFloat { screen.visible.height - 16 }
+
+    /// The top and the sides stay where they are: only the bottom edge moves.
+    func frame(height: CGFloat, width: CGFloat, margin m: NSEdgeInsets) -> CGRect {
+        let h = min(height, room) + m.top + m.bottom, w = width + m.left + m.right
+        return CGRect(x: right + m.right - w, y: top + m.top - h, width: w, height: h)
+    }
+}
+
 /// The verdict in the menu bar, and the widget hanging from it.
 @MainActor final class StatusBar: NSObject, NSWindowDelegate {
     /// Room around the widget for its own shadow, which has to travel with it as it resizes.
@@ -28,7 +68,7 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     /// True for a widget that opened by itself and hasn't been touched: it stays until told otherwise.
     private(set) var openedByItself = false
     var holdOpen = false
-    private var hangsFrom: CGFloat?
+    private var spot: WidgetSpot?
     private var height: CGFloat = 200
     private var shrink: DispatchWorkItem?
 
@@ -51,6 +91,10 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
         panel.onEscape = { [weak self] in self?.escape() }
         panel.contentView = host()
         ui.onHeight = { [weak self] h in self?.fit(height: h) }
+        // A display can go, or change size, with nothing in the widget changing.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.panel.isVisible == true { self?.place() } }
+        }
 
         if let button = item.button {
             button.target = self
@@ -102,7 +146,7 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     @objc private func clicked() {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true { showMenu(); return }
-        if panel.isVisible { hide() } else { openForUser() }
+        if panel.isVisible { hide() } else { openForUser(clickedAt: NSEvent.mouseLocation) }
     }
 
     private func showMenu() {
@@ -164,11 +208,11 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     }
 
     /// A click on the menu bar means someone wants it, so it takes the keyboard. The other app stays active.
-    func openForUser() {
+    func openForUser(clickedAt click: NSPoint? = nil) {
         openedByItself = false
         ui.page = nil
         ui.feedback = nil
-        place()
+        place(clickedAt: click)
         panel.makeKeyAndOrderFront(nil)
         item.button?.highlight(true)
         if !model.unreadable.isEmpty { Task { await model.refresh() } }
@@ -195,7 +239,7 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 
     func hide() {
         openedByItself = false
-        hangsFrom = nil
+        spot = nil
         ui.page = nil
         ui.feedback = nil
         ui.setup = nil
@@ -219,21 +263,20 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
         DispatchQueue.main.asyncAfter(deadline: .now() + (grew || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.34), execute: work)
     }
 
-    private func place() {
-        let screen = item.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
-        guard let visible = screen?.visibleFrame else { return }
-        let m = Self.margin
-        let room = visible.height - 16
-        if ui.maxBodyHeight != room { ui.maxBodyHeight = room }
-        let anchor = item.button?.window?.frame
-        let top = min(anchor?.minY ?? visible.maxY, visible.maxY) - 6 + m.top
-        // Set when it opens, then held: a word changing in the menu bar must never nudge an open widget sideways.
-        var right = (panel.isVisible ? hangsFrom : nil) ?? anchor?.maxX ?? visible.maxX
-        right = min(max(right, visible.minX + 8 + Grid.width), visible.maxX - 8)
-        hangsFrom = right
-        let h = min(height, room) + m.top + m.bottom
-        let w = Grid.width + m.left + m.right
-        panel.setFrame(NSRect(x: right + m.right - w, y: top - h, width: w, height: h), display: true)
+    /// Puts the widget where it hangs. It's the only thing that moves the window, and an open widget only changes height.
+    private func place(clickedAt click: NSPoint? = nil) {
+        func described(_ s: NSScreen) -> WidgetSpot.Screen { WidgetSpot.Screen(frame: s.frame, visible: s.visibleFrame) }
+        let screens = NSScreen.screens.map(described)
+        var opening = (item.button?.window?.screen ?? NSScreen.main).map(described)
+        var anchor = item.button?.window?.frame
+        if let click, let clicked = WidgetSpot.screen(at: click, in: screens) {
+            opening = clicked
+            anchor = WidgetSpot.item(window: anchor, on: clicked, click: click)
+        }
+        guard let next = WidgetSpot.next(held: spot, isOpen: panel.isVisible, screens: screens, opening: opening, item: anchor, width: Grid.width) else { return }
+        spot = next
+        if ui.maxBodyHeight != next.room { ui.maxBodyHeight = next.room }
+        panel.setFrame(next.frame(height: height, width: Grid.width, margin: Self.margin), display: true)
     }
 
     func windowDidBecomeKey(_ n: Notification) {

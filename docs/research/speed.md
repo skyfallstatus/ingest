@@ -210,11 +210,15 @@ Control from the same runs: `F_NOCACHE` alone on a buffered write still reads th
 
 - **A re-inserted card is read in full again.** The 12-hour remount window is gone. Copy and proof doesn't change, but the row above for the same card again is a full re-check, about 92 s on the test card.
 - **Taking a name on exFAT costs an extra create.** exFAT has no exclusive rename, so the name is reserved with `O_EXCL` first. 2,500 tiny files: before 23.65, 26.35, 26.37, 26.94 s, after 28.84, 30.08, 29.06, 30.50 s. That's about 1.4 ms per file, on exFAT only, about 0.2 s on the 138-file card, or 0.1% of 187 s. Skipping the `RENAME_EXCL` try after its first refusal gained nothing measurable, so it stays as it was.
-- **A job's end costs two more flushes,** one for each of its marks: about 60 ms a job.
+- **A job's start and end cost a flush each,** one for each of its marks, and a check asks the drive to flush once before it reads.
 - **Checks on proof and identity** add two `fstat` calls per file read, and one stat per file at each verdict. They don't show up in the trace.
 - **Opening the widget on a finished card** looks at each file on both sides, with no full read.
 
 The real card and drive weren't connected for this round, so copy and proof wasn't re-measured on them.
+
+### Why an empty file lost its proof
+
+A real run on the SD card ended `missing=1 verified=137` with no reason. `SONY/SONYCARD.IND` is the card's one empty file. FSKit exFAT numbers a file by its first cluster, and an empty file has none, so it's given a made-up ID near 2^64 (18446744073709551403 on the card), and that ID changes when macOS recycles the vnode. This Mac sits at `kern.num_vnodes == kern.maxvnodes`, so a long job's own traffic can recycle it. Watched directly on an exFAT image under metadata traffic: the empty file's ID changed three times with size and time unchanged, and a file with data never changed. Now an empty file has no identity in a stamp, since it has no bytes for one to protect.
 
 ### Tamper rig, for the new read path
 

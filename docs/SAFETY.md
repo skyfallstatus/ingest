@@ -18,19 +18,19 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 
 8. **Read everything, twice.** Every file is read in full from the card a second time, separately from the copy, and in full from the drive. The hash taken during the copy can't catch a bad read, because the same wrong bytes reach both sides. This second card read costs about half the time of a job, and it stays.
 9. **Read from the device.** Read-back has to reach the device, not the macOS cache, on both sides: `F_NOCACHE` writes, `F_FULLFSYNC`, `msync(MS_INVALIDATE)`, then an `F_NOCACHE` read. `F_NOCACHE` alone isn't enough. If either side's cache can't be cleared, rule 19 applies. A read counts only if it reached the listed size and the file didn't change during it. The evidence is in `docs/research/integrity-macos.md`.
-10. **A real name is earned.** A file is written under a temporary name and takes its real name only after the copy, the drive and the second card read agree. Temp, read-back, then rename: that order doesn't change. Temporary files live only in `.ingest/tmp`, and only files there are ever cleaned up, so nobody else's file can be taken for one.
-11. **Never overwrite.** An existing file must prove itself identical, or the job refuses. A real name is taken atomically: `RENAME_EXCL` where the filesystem has it, and on exFAT, which doesn't, an `O_EXCL` reservation of the name that the rename then replaces.
+10. **A real name is earned.** A file is written under a temporary name and takes its real name only after the copy, the drive and the second card read agree. Temp, read-back, then rename: that order doesn't change. Temporary files live only in `.ingest/tmp`, and only files there are ever cleaned up, so nobody else's file can be taken for one. The one other thing a later job may remove is an empty file the journal shows this app reserved and never filled, once the job that reserved it has died.
+11. **Never overwrite.** An existing file must prove itself identical, or the job refuses. A real name is taken atomically: `RENAME_EXCL` where the filesystem has it, and on exFAT, which doesn't, an `O_EXCL` reservation of the name, checked as still being that empty file, that the rename then replaces.
 12. **The app never writes to a card.** Not a marker, not a manifest, not a timestamp.
 13. **The source must still be the source.** If the file at a path no longer matches what was read, it isn't copied. A different card with the same names and sizes is caught by fingerprints.
-14. **Nothing on a card is left behind.** Every file is copied, including ones the app doesn't recognise, and empty folders survive. Only the system files macOS and Windows leave on a volume are skipped. A card's own index is never treated as a list of what's there: the card itself is listed.
+14. **Nothing on a card is left behind.** Every file is copied, including ones the app doesn't recognise, and empty folders survive: one missing from the drive is a hold. Only the system files macOS and Windows leave on a volume are skipped. A card's own index is never treated as a list of what's there: the card itself is listed.
 15. **The strict listing stays.** Cards are walked with the strict C walker, which reports every failure. `FileManager` silently hides entries on exFAT and must never list a card.
 
 ## Proof
 
 16. **The ledger is a hint.** Nothing read from a drive can create a proof. The record on the drive may suggest where a file is. Only reading both sides in full proves it.
 17. **Proof is in memory only, and ends with the mount.** It's never written down. It ends when the app quits, and when the card or the drive leaves the Mac, however briefly. A card put back in is read in full again, about 92 s on the test card. The owner decided this on 2026-11-02, replacing a 12-hour remount window, after three independent reviews: proof must not survive a card leaving the Mac. Nothing about a card can show it wasn't changed while it was out.
-18. **Proof is tied to both files.** It holds only for the card file with the size, modified time and fingerprint it had, and the drive file with the identity, size and modified time it had. Any change means unproved, and it's read again. While nothing changes, nothing is read in full again just to redraw the panel. Recheck always reads both sides again.
-19. **Weak stays weak.** If a drive wouldn't confirm a flush, or the cache couldn't be cleared on either side, that copy is a hold. It stays a hold on every later visit, under any new name, and a later good read doesn't clear it. A weak mark reaches the drive before the file gets its real name, and a job only becomes strong once the drive has confirmed it and that's on the record.
+18. **Proof is tied to both files.** It holds only for the card file with the size, modified time and fingerprint it had, and the drive file with the identity, size and modified time it had. Any change means unproved, and it's read again. An empty file has no identity to hold, because exFAT and FAT make one up that macOS changes on its own, and no bytes to prove: its size and time still count. While nothing changes, nothing is read in full again just to redraw the panel. Recheck always reads both sides again.
+19. **Weak stays weak.** If a drive wouldn't confirm a flush, or the cache couldn't be cleared on either side, that copy is a hold. It stays a hold on every later visit, under any new name, and a later good read doesn't clear it. A weak mark reaches the drive before the file gets its real name. A job is weak until it's sealed: its record opens before it writes anything, and it's sealed only once the drive has confirmed the job, so a job cut off for any reason stays weak. A check asks the drive to flush before it reads.
 20. **Time is never evidence.** Modified times are recorded and compared for convenience. They never prove anything.
 
 ## The drive
@@ -43,6 +43,7 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 21. **Nothing claims a clip was played.** No clip is played. Every check reads structure, and the wording says so. A format with no check says "Clips were not checked or played."
 22. **Claims follow evidence.** A rule built from documents is labelled that way until a real file confirms it. See `CONTRIBUTING.md`.
 23. **A camera's name is never proof.** Identification is best effort and never changes what gets copied.
+26. **Not safe always says why.** Every file left unproved carries a reason a person can read, and it survives a rescan until something new is known about that file.
 
 ## Known limits, stated plainly
 
@@ -50,8 +51,8 @@ These are accepted, and they must stay written down:
 
 - **A drive can lie about its cache.** Software can't see past it. A drive that refuses to confirm goes to a hold, but a drive that confirms falsely can't be detected. Only a power cycle clears such a cache, and software can't see one.
 - **A file changed with nothing to show for it.** While a card and a drive stay mounted, proof isn't re-read. A card file changed only in the middle, keeping its size, modified time and first and last 64 KiB, keeps its proof, and so does a drive file changed in place with its size and modified time put back. Recheck reads both sides again, and leaving the Mac ends the proof.
-- **A careless writer on exFAT.** With no atomic exclusive rename there, a program that opens a reserved name without `O_EXCL`, in the instant between the app's last check and its rename, can lose what it wrote. That program would write over anything at that name.
-- **A drive pulled mid-job.** Files already copied aren't marked weak: each had its own flush confirmed, and the next mount reads them in full. A job cut off during its final flush is marked weak.
+- **A careless writer on exFAT.** With no atomic exclusive rename there, a program that writes to, or renames onto, a reserved name in the instant between the app's last check and its rename can lose what it wrote. It would write over anything at that name.
+- **A job cut off leaves its files on hold.** A drive pulled mid-job, a crash and a dying drive look the same afterwards, so the files that job finished stay on hold for good, even after a full read. Stop and Quit let the job end properly, so neither does this. Copying that card to a new folder gives it a clean record.
 - **Striped BRAW pairs are matched by name, folder and this drive's record.** No real pair has been tested, so whether two halves are the same take isn't checked.
 - **One drive is one copy.**
 

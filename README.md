@@ -79,6 +79,8 @@ macOS 14 or later, on Apple silicon or Intel. A working drive formatted exFAT, A
 
 Beta builds aren't notarised yet, because the project has no Apple Developer ID. macOS will refuse the first launch, and you only have to get past that once per build.
 
+The same steps are in `Read Me First` on the disk image, and in [BETA.md](BETA.md).
+
 1. Open `Ingest.dmg` and drag Ingest to Applications.
 2. Open Ingest from Applications. macOS says it can't be opened. Click **Done**.
 3. Open **System Settings › Privacy & Security** and scroll down to **Security**.
@@ -101,7 +103,7 @@ Report a Bug and Suggest a Feature put your report on the clipboard and open a b
 
 ## What it leaves on your drive
 
-- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof.
+- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: files from a job that was cut off, by a pulled cable or a crash, stay on "Have a look" on that drive even after a full read.
 - `ascmhl/`, beside each card's footage: the checksum manifest.
 
 Your cards are never written to.

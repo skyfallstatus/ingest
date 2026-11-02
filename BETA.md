@@ -14,11 +14,13 @@ Thank you for trying this. Ingest copies a camera card to your drive, reads both
 
 Clips aren't played. It proves the bytes match, and a clip that was already broken in camera will match perfectly. Open a few clips, as you normally would.
 
+If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault.
+
 Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 
 ## What to send back
 
-Use **Report a Bug** or **Suggest a Feature** in the `···` menu. If GitHub says the page can't be found, use **Copy Details** and send it to the person who gave you the app.
+Use **Report a Bug** or **Suggest a Feature** in the `···` menu. **Open GitHub** copies your report and opens a blank page: paste it there and send it. Nothing you typed reaches GitHub until you do. If GitHub says the page can't be found, send what you copied to the person who gave you the app. New beta versions come from them too, so Check for Updates can't find them.
 
 The most useful things to hear about:
 

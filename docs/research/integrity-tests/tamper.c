@@ -36,7 +36,7 @@ static void openraw(void){ if(rawfd>0)close(rawfd); rawfd=open(rawpath,O_RDWR); 
 static long pgsz;
 
 static void fill(uint8_t *b, uint32_t scen, uint64_t idx) {
-  memcpy(b, "TMPRTMPR", 8); memcpy(b+8, &scen, 4); memcpy(b+12, &idx, 8);
+  memset(b, 0, 24); memcpy(b, "TMPRTMPR", 8); memcpy(b+8, &scen, 4); memcpy(b+12, &idx, 8);   // bytes 20 to 23 too, or expected() depends on the stack
   uint64_t x = 0x9E3779B97F4A7C15ULL ^ (((uint64_t)scen<<32) | idx);
   for (size_t i=24;i<BLK;i++){ x^=x<<13;x^=x>>7;x^=x<<17;b[i]=(uint8_t)x; }
 }

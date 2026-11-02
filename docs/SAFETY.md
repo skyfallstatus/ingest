@@ -8,8 +8,8 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 
 1. **One place decides.** `Verdict.evaluate` is the only code that can say a card is safe. Nothing else may produce or imitate that result.
 2. **Green needs all of it.** The listing finished with no errors, every listed file opened, every file was proved identical by reading both sides, nothing is a blocker, and the card still lists exactly what was proved.
-3. **Green is about this drive.** A proof belongs to one drive. Change the working drive and it's gone. No drive means no green.
-4. **The last look is real.** Before green, the drive must still hold every file at its listed size, and the card must be listed and fingerprinted again and match.
+3. **Green is about this drive.** A proof belongs to one mount of one drive. Change the working drive, or unplug it, and it's gone. Another drive at the same path is another drive, even with the same name and UUID. No drive means no green.
+4. **The last look is real.** Before green, every file on the drive must still be the file that was proved: same mount, same file, same size, same modified time. The card must be listed and fingerprinted again and match, modified times included, and any device log is read again after the full reads that can add to it.
 5. **Doubt is never green.** A blocker stops the verdict. A hold means "Have a look". Only a note leaves a card green. A rule that can't reach a conclusion must not read as a pass.
 6. **An unreadable volume isn't an empty one.** A denied permission or a failed listing is never "empty" and never "safe".
 7. **Green is earned on screen too.** The green foot and the word "format" in the menu bar appear only on a proved card, and "Don't format" never appears on green.
@@ -17,9 +17,9 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 ## The copy
 
 8. **Read everything, twice.** Every file is read in full from the card a second time, separately from the copy, and in full from the drive. The hash taken during the copy can't catch a bad read, because the same wrong bytes reach both sides. This second card read costs about half the time of a job, and it stays.
-9. **Read from the device.** Read-back has to reach the device, not the macOS cache: `F_NOCACHE` writes, `F_FULLFSYNC`, `msync(MS_INVALIDATE)`, then an `F_NOCACHE` read. `F_NOCACHE` alone isn't enough. The evidence is in `docs/research/integrity-macos.md`.
-10. **A real name is earned.** A file is written under a temporary name and takes its real name only after the copy, the drive and the second card read agree. Temp, read-back, then rename: that order doesn't change.
-11. **Never overwrite.** An existing file must prove itself identical, or the job refuses.
+9. **Read from the device.** Read-back has to reach the device, not the macOS cache, on both sides: `F_NOCACHE` writes, `F_FULLFSYNC`, `msync(MS_INVALIDATE)`, then an `F_NOCACHE` read. `F_NOCACHE` alone isn't enough. If either side's cache can't be cleared, rule 19 applies. A read counts only if it reached the listed size and the file didn't change during it. The evidence is in `docs/research/integrity-macos.md`.
+10. **A real name is earned.** A file is written under a temporary name and takes its real name only after the copy, the drive and the second card read agree. Temp, read-back, then rename: that order doesn't change. Temporary files live only in `.ingest/tmp`, and only files there are ever cleaned up, so nobody else's file can be taken for one.
+11. **Never overwrite.** An existing file must prove itself identical, or the job refuses. A real name is taken atomically: `RENAME_EXCL` where the filesystem has it, and on exFAT, which doesn't, an `O_EXCL` reservation of the name that the rename then replaces.
 12. **The app never writes to a card.** Not a marker, not a manifest, not a timestamp.
 13. **The source must still be the source.** If the file at a path no longer matches what was read, it isn't copied. A different card with the same names and sizes is caught by fingerprints.
 14. **Nothing on a card is left behind.** Every file is copied, including ones the app doesn't recognise, and empty folders survive. Only the system files macOS and Windows leave on a volume are skipped. A card's own index is never treated as a list of what's there: the card itself is listed.
@@ -28,10 +28,15 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 ## Proof
 
 16. **The ledger is a hint.** Nothing read from a drive can create a proof. The record on the drive may suggest where a file is. Only reading both sides in full proves it.
-17. **Proof is in memory only.** It's never written down, and it ends when the app quits. It can survive a remount for up to 12 hours within one run, only for a volume with a UUID, and only per file while size, modified time and fingerprint all match.
-18. **Proof is tied to the file it proved.** A file changed in place loses its proof.
-19. **Weak stays weak.** If a drive wouldn't confirm a flush, or the cache couldn't be cleared, that copy is a hold. It stays a hold on every later visit, and a later good read doesn't clear it.
+17. **Proof is in memory only, and ends with the mount.** It's never written down. It ends when the app quits, and when the card or the drive leaves the Mac, however briefly. A card put back in is read in full again, about 92 s on the test card. The owner decided this on 2026-11-02, replacing a 12-hour remount window, after three independent reviews: proof must not survive a card leaving the Mac. Nothing about a card can show it wasn't changed while it was out.
+18. **Proof is tied to both files.** It holds only for the card file with the size, modified time and fingerprint it had, and the drive file with the identity, size and modified time it had. Any change means unproved, and it's read again. While nothing changes, nothing is read in full again just to redraw the panel. Recheck always reads both sides again.
+19. **Weak stays weak.** If a drive wouldn't confirm a flush, or the cache couldn't be cleared on either side, that copy is a hold. It stays a hold on every later visit, under any new name, and a later good read doesn't clear it. A weak mark reaches the drive before the file gets its real name, and a job only becomes strong once the drive has confirmed it and that's on the record.
 20. **Time is never evidence.** Modified times are recorded and compared for convenience. They never prove anything.
+
+## The drive
+
+24. **Every path stays on the drive.** Paths from a saved setup, a ledger, an index or a person are refused if they're absolute, hold `.` or `..`, or lead into the app's own folder. Everything on the drive is reached with no symbolic link on the way, on the drive's own volume, and a file that turns out to be the card's own file is never a copy of it.
+25. **A job belongs to its drive.** The working drive can't change under a running or queued job, and everything known about a card is dropped before another drive is looked at.
 
 ## Honesty
 
@@ -44,9 +49,12 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 These are accepted, and they must stay written down:
 
 - **A drive can lie about its cache.** Software can't see past it. A drive that refuses to confirm goes to a hold, but a drive that confirms falsely can't be detected. Only a power cycle clears such a cache, and software can't see one.
-- **The remount window in rule 17.** A card changed while out of the reader, only in the middle of a file, keeping its UUID, size, modified time and first and last 64 KiB, would keep its proof for up to 12 hours. The same blind spot applies while a card stays mounted.
+- **A file changed with nothing to show for it.** While a card and a drive stay mounted, proof isn't re-read. A card file changed only in the middle, keeping its size, modified time and first and last 64 KiB, keeps its proof, and so does a drive file changed in place with its size and modified time put back. Recheck reads both sides again, and leaving the Mac ends the proof.
+- **A careless writer on exFAT.** With no atomic exclusive rename there, a program that opens a reserved name without `O_EXCL`, in the instant between the app's last check and its rename, can lose what it wrote. That program would write over anything at that name.
+- **A drive pulled mid-job.** Files already copied aren't marked weak: each had its own flush confirmed, and the next mount reads them in full. A job cut off during its final flush is marked weak.
+- **Striped BRAW pairs are matched by name, folder and this drive's record.** No real pair has been tested, so whether two halves are the same take isn't checked.
 - **One drive is one copy.**
 
 ## If you change the engine
 
-Run `scripts/test.sh`, and `scripts/selftest.sh` if the app's flow was touched. `Tests/IngestCoreTests/SafetyRegressionTests.swift` holds one test per attack that once produced, or could have produced, a false Safe. Never weaken or delete one of those to make a change pass. A bug that could produce a false Safe gets a test there before it gets a fix.
+Run `scripts/test.sh`, and `scripts/selftest.sh` if the app's flow was touched. `Tests/IngestCoreTests/SafetyRegressionTests.swift` holds one test per attack that once produced, or could have produced, a false Safe, `DiskImageTests.swift` beside it holds the ones that need a real volume, and `Tests/IngestAppTests` the ones that live in the app's own model. Never weaken or delete one of those to make a change pass. A bug that could produce a false Safe gets a test there before it gets a fix.

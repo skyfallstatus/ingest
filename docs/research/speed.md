@@ -18,7 +18,7 @@ Tools: `scripts/bench/` (`iotrace.c` times every system call of the unmodified b
 | Same, final build, untraced (s) | | 92.50 | | |
 | Re-check against the drive, with an 11 s index scan (s) | 113.47 | 103.80, 104.16 | | 8.4% |
 | 2,500 tiny files (s, mean of 6 and 3, noisy) | 29.1 | 26.6 | | 9% |
-| Same card again, this run of the app | a full re-check | fingerprints only | | all of it |
+| Same card again, this run of the app | a full re-check | a full re-check, since 2026-11-02 | | none. See [Proof and the mount](#proof-and-the-mount) |
 
 The floor is the whole answer: both jobs are limited by the card, whose ceiling is 939 MB/s. Copy and proof reads every byte from it twice, so it can't beat 2 × 86.67 GB ÷ 939 MB/s = 184.6 s. The app is now at 98.7% of that, and the re-check at 99.8%.
 
@@ -158,7 +158,7 @@ Runs before: 26.32, 29.77, 28.33, then on a fresh image 34.04, 30.51, 25.66. Aft
 
 1. **Overlapped reads.** One read-ahead primitive in `io.c` now serves copy and proof: two reads in flight, chunks handed over strictly in file order, hashing on the consumer. 8 MiB for copies, 2 MiB for proof. Files under 16 MiB, and any file whose listed size is 0, are read in line with no threads, until end of file as before. This is almost all of the gain.
 2. **Journal sync batching.** Tiny files share a sync, at most one each 250 ms. Saves 1.2 ms per file. A long clip still syncs its record, as it takes longer than that.
-3. **Proof survives a remount.** In memory only, for 12 hours in one run of the app, only for a volume with a UUID, and only per file while size, modified time and fingerprint all match.
+3. **Proof survived a remount.** Withdrawn on 2026-11-02. See [Proof and the mount](#proof-and-the-mount).
 4. **Bytes on screen.** A re-check now shows the same meter, rate and time left as a copy. A copy counts both card reads, so the meter no longer stalls while a file is proved. Time left is the remaining work at the average speed since the start.
 
 ### A safety bug found on the way
@@ -170,8 +170,8 @@ Runs before: 26.32, 29.77, 28.33, then on a fresh image 34.04, 30.51, 25.66. Aft
 - **Second card read:** untouched. Every file is read in full from the card and the drive in `readBoth`, independently of the copy.
 - **Ledger is a hint:** unchanged. `Proof` is in memory only, and nothing read from a drive can create one.
 - **Temp, rename, no overwrite, strict listing, weak flush, final fingerprints:** code unchanged. Verdict logic unchanged.
-- **A batched journal:** a record still only follows a proved file in place, so any record that survives is true. A pulled drive can lose up to 250 ms of records, and those files are then found and read again. A weak mark syncs at once, as nothing else keeps it.
-- **Remount:** this is the one behaviour that changed on purpose. `selftest` used to require a re-read after a remount. It now requires no re-read in the same run, and a full read after proofs are forgotten, as in a new run. What it gives up: a card changed while out of the reader, in the middle of a file only, keeping its volume UUID, size, modified time and first and last 64 KiB, would keep its proof for up to 12 hours. The same blind spot already applies while a card stays mounted.
+- **A batched journal:** a strong record is only a hint, so losing one costs a re-read. Syncs are at least 250 ms apart and a record can wait for the next one or the end of the job, however long the next file takes: there's no 250 ms bound on how long a record stays unsynced. A weak mark syncs at once, as nothing else keeps it, and a failure to sync it is reported.
+- **Remount:** a re-read after a remount was dropped here for 12 hours, and restored on 2026-11-02. See below.
 
 ### Device read path, tamper rig
 
@@ -204,6 +204,31 @@ Control from the same runs: `F_NOCACHE` alone on a buffered write still reads th
 | Larger buffers, higher QD | 939 is reached at QD2. More memory, no speed |
 | A second read in parallel with the first | Same card, same ceiling |
 
+## Proof and the mount
+
+2026-11-02, after three independent reviews, and the owner's decision. Measured on throwaway exFAT sparse images on the internal SSD, old and new builds taking turns.
+
+- **A re-inserted card is read in full again.** The 12-hour remount window is gone. Copy and proof doesn't change, but the row above for the same card again is a full re-check, about 92 s on the test card.
+- **Taking a name on exFAT costs an extra create.** exFAT has no exclusive rename, so the name is reserved with `O_EXCL` first. 2,500 tiny files: before 23.65, 26.35, 26.37, 26.94 s, after 28.84, 30.08, 29.06, 30.50 s. That's about 1.4 ms per file, on exFAT only, about 0.2 s on the 138-file card, or 0.1% of 187 s. Skipping the `RENAME_EXCL` try after its first refusal gained nothing measurable, so it stays as it was.
+- **A job's end costs two more flushes,** one for each of its marks: about 60 ms a job.
+- **Checks on proof and identity** add two `fstat` calls per file read, and one stat per file at each verdict. They don't show up in the trace.
+- **Opening the widget on a finished card** looks at each file on both sides, with no full read.
+
+The real card and drive weren't connected for this round, so copy and proof wasn't re-measured on them.
+
+### Tamper rig, for the new read path
+
+`tamper.c` left bytes 20 to 23 of each block unwritten, so `expected()` depended on what was on the stack. Those bytes are now zero. Disk images only, with the device guard, `invalidated 1` throughout:
+
+| | exFAT, 8 MiB (in line) | APFS, 8 MiB | exFAT, 64 MiB (overlapped) | APFS, 64 MiB |
+|---|---|---|---|---|
+| Buffered write | device | device | device | device |
+| Buffered write, third-party read | device | device | device | device |
+| `F_NOCACHE` write | device | device | device | device |
+| `F_NOCACHE` write, third-party read | device | device | device | device |
+
+Control from the same runs: `F_NOCACHE` alone on a buffered write still reads the cache, 2,048 of 2,048 blocks, 16,384 of 16,384 at 64 MiB.
+
 ## Gains blocked by a safety rule
 
 | Rule | What it costs | Owner's call |
@@ -211,6 +236,8 @@ Control from the same runs: `F_NOCACHE` alone on a buffered write still reads th
 | Full second card read | 92 s, half of a copy and proof. Without it: about 94 s | Decided: it stays |
 | `F_FULLFSYNC` per file | 36% of tiny files. 0.3% on this card | Left as it is. Batching would mean a drive-wide weak flush, and a new ordering of flush and rename |
 | Trying RENAME_EXCL first | 0.44 ms per file: 4% of tiny files, 0.03% here | Left as it is |
+| `O_EXCL` reservation on exFAT | 1.4 ms per file: about 15% of tiny files, 0.1% here | It closes a real overwrite. See [Proof and the mount](#proof-and-the-mount) |
+| Full re-read of a re-inserted card | About 92 s, every time a card goes back in | Decided: proof ends when a card leaves the Mac |
 
 ## Limits of these numbers
 

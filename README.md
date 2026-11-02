@@ -8,17 +8,19 @@ It lives in the menu bar as a card icon and a word: `Reading`, `96 left`, `Check
 
 ## What "Safe to format" promises
 
-The app says it only when all of this is true for the card in front of you, on the drive you're using, in this run of the app:
+The app says it only when all of this is true for the card in front of you, on the drive you're using, with both of them plugged in since they were read:
 
 - The card was listed completely, with no errors, and every listed file opened.
 - Every file was copied to a temporary name, written out to the drive, then read back from the drive itself rather than from memory.
-- Every file was read from the card a second time, separately from the copy. Both reads and the copy agree, by XXH64 hash and by size.
+- Every file was read from the card a second time, separately from the copy. Both reads and the copy agree, by XXH64 hash and by size, and match the size the card listed.
 - Only then did the file get its real name.
 - A file that was already on the drive wasn't taken on trust. It was read in full on both sides too.
-- At the very end the drive still has every file, and the card still lists exactly what was proved.
+- At the very end every file on the drive is still the file that was proved, and the card still lists exactly what was proved.
 - Nothing on the card raised a problem that stops the verdict.
 
-If a file doesn't match, the app tries once more and then says so. A file that fails never gets its real name on the drive. An ASC MHL manifest is written beside the footage, so other tools can check the copy without this app.
+**A proof doesn't outlive the plug.** Take the card or the drive out, even for a moment, and the proof ends. Put the card back in and it's recognised at once, then read in full on both sides before it can say Safe again: about 92 seconds on the 86 GB test card, from a card that reads at 939 MB/s. A file on the drive that changes loses its proof too, and is read again. As long as nothing changes and nothing comes out, opening the widget doesn't read anything in full.
+
+If a file doesn't match, the app tries once more and then says so. A file that fails never gets its real name on the drive. An ASC MHL manifest is written beside the footage, so other tools can check the copy without this app. A card that keeps its own ASC MHL history is left as it was, and stills sent to their own folder aren't in the manifest.
 
 ## What it doesn't promise
 
@@ -54,7 +56,7 @@ Copying and proving bytes works the same for any card. What changes by camera is
 | Canon | Cinema EOS and R5 C: CRM, XF-AVC | **Documents only** | No real card and no real file |
 | Blackmagic | URSA Cine, PYXIS, Cinema Camera 6K, Pocket 6K, URSA Mini Pro | Real files | Public clips, some re-saved after shooting |
 | Blackmagic | Pocket 4K CinemaDNG | Real files | Public clips |
-| Blackmagic | Striped BRAW, `.braw` with `.braw2` | **Documents only** | No real pair. Always a hold until both halves are together |
+| Blackmagic | Striped BRAW, `.braw` with `.braw2` | **Documents only** | No real pair. Always a hold until both halves are together, each proved by this app |
 | RED | DSMC, 2015 firmware | Real files | One public clip |
 | RED | KOMODO, KOMODO-X, V-RAPTOR | **Documents only** | No real file |
 | ARRI | ALEXA 35, Mini LF, ALEXA LF, ALEXA 65 | Real files | Public samples, reels rebuilt from real file names |
@@ -87,17 +89,19 @@ On macOS 14 you can skip all that: Control-click the app and choose **Open**.
 
 Ingest then shows in the menu bar. The first time it reads a card or drive, macOS asks whether it may read removable volumes. Say yes. Each new beta build asks again.
 
+If the menu bar is full, macOS can hide the card icon. Open Ingest from Applications again and the widget appears.
+
 **Open at login** is in Settings. It works with beta builds and doesn't need the app to be in Applications, but macOS remembers where the app was when you turned it on, so move it to Applications first. Whether it stays on across a real log out, or a new beta build, isn't tested yet. If it looks off, turn it on again.
 
 ## Network
 
 The app makes one network call: asking GitHub for the latest release, when you click Check for Updates or if you turn on the automatic check in Settings, which is off by default. There's no tracking.
 
-Report a Bug and Suggest a Feature open a filled-in page in your browser, and nothing is sent unless you send it there. They add the app version, macOS version, Mac family and the camera maker if a card is in. They never add paths, file names, client names, serials or drive names.
+Report a Bug and Suggest a Feature put your report on the clipboard and open a blank GitHub page in your browser. Nothing you typed goes to GitHub unless you paste it there and send it. The report adds the app version, macOS version, Mac family and the camera maker if a card is in. It never adds paths, file names, client names, serials or drive names.
 
 ## What it leaves on your drive
 
-- `.ingest/`, a hidden folder holding your folder setup and a record of what was copied. That record is only a hint: it's never accepted as proof.
+- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof.
 - `ascmhl/`, beside each card's footage: the checksum manifest.
 
 Your cards are never written to.
@@ -108,7 +112,7 @@ You need Swift 6.2 or later. Command Line Tools are enough, and Xcode isn't need
 
 ```sh
 swift build                       # everything
-scripts/test.sh                   # the test suite, no hardware needed
+scripts/test.sh                   # the test suite, no hardware needed. Mounts small throwaway images under /tmp
 scripts/build-app.sh              # universal, ad-hoc signed dist/Ingest.app
 scripts/build-dmg.sh              # dist/Ingest.dmg from that app
 ```

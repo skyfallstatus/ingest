@@ -100,10 +100,6 @@ private func executable(_ path: String, _ text: String) throws {
     for rel in ["README.md", "NOTICE"] { #expect(try !text(rel).contains("All rights reserved"), "\(rel)") }
 }
 
-@Test func theIgnoreFileSaysNothingAboutHowThisWasMade() throws {
-    let ignore = try String(contentsOf: repo.appendingPathComponent(".gitignore"), encoding: .utf8)
-}
-
 /// The real `scripts/test.sh` around a harmless command, with its own lock, so it can run inside a test run.
 private func safety(_ command: String, env: [String: String] = [:], lock: String? = nil) throws -> (code: Int32, said: String, lock: String) {
     let p = Process(), out = Pipe()

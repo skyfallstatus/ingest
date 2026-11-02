@@ -224,18 +224,22 @@ import UserNotifications
             let settling = switch c.phase { case .ready, .reading, .checking: true; default: false }
             let cutShort = settling && c.pendingDestination != nil && c.filesToGo > 0
             if c.phase == .copying || cutShort {
-                c.error = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
+                let pulled = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
+                c.error = pulled
                 c.volumeGone = true
                 c.verdict = nil
                 c.control.stop()
                 if cutShort { c.phase = .stopped }
-                notify(title: "Don't format \(c.name)", body: c.error ?? "It came out before it was finished.")
+                notify(title: "Don't format \(c.name)", body: pulled)
             } else { queue.removeAll { $0 === c }; cards.removeAll { $0 === c } }
         }
         drives.removeAll { d in
             guard !stillHere(d.volume) else { return false }
             if d === workingDrive {
-                for c in cards where c.isBusy { c.control.stop(); c.error = "\(d.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
+                for c in cards where c.isBusy {
+                    c.control.stop()
+                    if !c.volumeGone { c.error = "\(d.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }    // the card's own warning matters more
+                }
             }
             return true
         }
@@ -300,7 +304,7 @@ import UserNotifications
         for c in cards where !c.isBusy {
             c.forgetDrive()
             c.control.reset()       // whatever stopped it stopped a job on the old drive
-            if c.driveWentAway { c.driveWentAway = false; c.error = nil }
+            if c.driveWentAway, workingDrive != nil, !c.volumeGone { c.driveWentAway = false; c.error = nil }     // it says why until there's a drive again
             if c.read != nil, !c.volumeGone { Task { await self.matchCard(c) } }
         }
     }
@@ -590,10 +594,21 @@ import UserNotifications
         }
     }
 
+    /// Copies a card into a new folder of its own inside `folder`, a path on the working drive.
+    func copy(_ card: CardSession, into folder: String) {
+        guard let drive = workingDrive else { return }
+        let base = card.probe.reel ?? (CardSession.friendlyName(card.volume.name) == "Card" ? "Card 1" : card.volume.name)
+        var name = base, n = 2
+        let taken = reserved(besides: card)
+        func free(_ path: String) -> Bool { drive.existing(path) == nil && !taken.contains(matchKey(path)) }
+        while !free(folder.isEmpty ? name : folder + "/" + name) { name = "\(base) \(n)"; n += 1 }
+        start(card, destination: Destination(footageRoot: folder.isEmpty ? name : folder + "/" + name))
+    }
+
     /// Folders other cards are about to fill. They aren't on the drive yet, so the drive can't say they're taken.
     func reserved(besides card: CardSession) -> Set<String> {
         var out: Set<String> = []
-        for c in cards where c !== card && c.phase != .finished {
+        for c in cards where c !== card && c.phase != .finished && !c.volumeGone {
             guard let d = c.pendingDestination else { continue }
             for path in [d.footageRoot, d.stillsRoot, d.audioRoot].compactMap({ $0 }) { out.insert(matchKey(path)) }
         }

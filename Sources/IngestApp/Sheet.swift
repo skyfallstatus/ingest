@@ -267,7 +267,9 @@ struct CardSheet: Equatable {
         case .stopped:
             let unread = c.states.values.reduce(0) { if case .likely = $1 { $0 + 1 } else { $0 } }
             if unread > 0 { return no("Stopped. \(plural(unread)) still to check.", s.failed ? .failed : .notDone) }
-            return no("Stopped. \(onlyHere(s.toGo))", s.failed ? .failed : .notDone)
+            // With the card or the drive gone, all that can be said is what's not proved. Most of it may well be on the drive.
+            let gone = c.volumeGone || s.model.workingDrive == nil
+            return no(gone ? "Stopped. \(plural(s.toGo)) not proved yet." : "Stopped. \(onlyHere(s.toGo))", s.failed ? .failed : .notDone)
         case .ready, .finished:
             break
         }
@@ -280,7 +282,8 @@ struct CardSheet: Equatable {
                 return no("\(plural(s.checkFailures.count)) didn't match.", .failed, s.canName ? .copy(s.toGo) : nil)
             }
             // What can be read can still be rescued, so the form that's open keeps its button.
-            if s.toGo > 0 { return no(onlyHere(s.toGo), .failed, s.canName ? .copy(s.toGo) : nil) }
+            // Nothing was going anywhere, so what failed was a check of a copy that's there.
+            if s.toGo > 0 { return no(s.hasDestination ? onlyHere(s.toGo) : "\(plural(s.toGo)) not proved yet.", .failed, s.canName ? .copy(s.toGo) : nil) }
             return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
         }
         if c.isHold { return no("On \(d) and checked, but take a look first.", .look, c.phase == .finished ? .eject : nil) }
@@ -323,8 +326,11 @@ struct CardSheet: Equatable {
         guard let drive = s.model.workingDrive else {
             let unset = s.model.drives.prefix(2)
             line.label = "On your drive"
-            if c.read != nil, !s.working {
-                line.detail = [unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on."]
+            if c.volumeGone, !s.working {           // no drive can carry a card on that's out of the Mac
+                line.detail = c.error.map { [$0] } ?? []
+                line.actions = [.dismiss]
+            } else if c.read != nil, !s.working {
+                line.detail = [c.error ?? (unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on.")]
                 line.actions = unset.map { .useDrive(id: $0.id, name: s.model.label(of: $0)) }
             }
             return line
@@ -381,11 +387,11 @@ struct CardSheet: Equatable {
             line.mark = .failed
             line.disagrees = true
             line.detail = ["\(first.file.name)\(more > 0 ? " and \(more) more" : ""): \(first.why)"]
-            line.actions = [.copyAgain(s.toGo)]
+            line.actions = s.hasDestination ? [.copyAgain(s.toGo)] : []     // with nowhere to go, Copy Again would do nothing
         } else if s.hasDestination, s.toGo > 0, s.checkFailures.isEmpty {
             line.actions = [.copyAgain(s.toGo)]     // a copy that ended short continues where it was going
         }
-        if s.hasDestination, c.phase == .ready, s.toGo > 0, s.checkFailures.isEmpty { line.actions.append(.chooseFolder) }  // or goes somewhere else
+        if s.hasDestination, c.phase == .ready, s.toGo > 0 { line.actions.append(.chooseFolder) }  // or goes somewhere else, and a bad copy holding the name leaves nothing else
         return line
     }
 
@@ -413,6 +419,7 @@ struct CardSheet: Equatable {
             line.mark = .failed
             line.disagrees = true
             line.detail = ["\(first.file.name)\(more > 0 ? " and \(more) more" : "") doesn't match."]
+            if s.hasDestination { line.detail.append("Choose another folder, or remove the bad copy and copy again.") }
             line.actions = s.copyFailures.isEmpty && c.pendingDestination != nil ? [.copyAgain(s.toGo)] : []
         } else if !onDrive, s.cardChanged {
             line.mark = .failed

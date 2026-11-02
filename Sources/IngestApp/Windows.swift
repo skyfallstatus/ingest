@@ -26,12 +26,7 @@ import IngestCore
         }
         var rel = String(url.path.dropFirst(drive.path.count))
         if rel.hasPrefix("/") { rel.removeFirst() }
-        let base = card.probe.reel ?? (CardSession.friendlyName(card.volume.name) == "Card" ? "Card 1" : card.volume.name)
-        var name = base, n = 2
-        let taken = model.reserved(besides: card)
-        func free(_ folder: String) -> Bool { drive.existing(folder) == nil && !taken.contains(matchKey(folder)) }
-        while !free(rel.isEmpty ? name : rel + "/" + name) { name = "\(base) \(n)"; n += 1 }
-        model.start(card, destination: Destination(footageRoot: rel.isEmpty ? name : rel + "/" + name))
+        model.copy(card, into: rel)
     }
 
     func mayQuit(model: AppModel) -> Bool {

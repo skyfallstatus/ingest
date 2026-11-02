@@ -113,6 +113,17 @@ private func open(on screen: WidgetSpot.Screen, item: CGRect) throws -> WidgetSp
         #expect(WidgetSpot.screen(at: NSPoint(x: 2000, y: 1440), in: [laptop, big]) == big)
     }
 
+    @Test func `A click at the seam between two stacked screens goes to the lower one's menu bar`() {
+        #expect(WidgetSpot.screen(at: NSPoint(x: 1000, y: 0), in: [big, laptop]) == laptop)
+    }
+
+    @Test func `An item left over from a display that's gone isn't trusted`() throws {
+        let gone = WidgetSpot.Screen(frame: big.frame.offsetBy(dx: 0, dy: 500), visible: big.visible.offsetBy(dx: 0, dy: 500))
+        let held = try #require(WidgetSpot.next(held: nil, isOpen: false, screens: [gone, laptop], opening: laptop, item: itemOnLaptop, width: width))
+        let after = try #require(WidgetSpot.next(held: held, isOpen: true, screens: [gone], opening: gone, item: itemOnLaptop, width: width))
+        #expect(gone.visible.contains(CGPoint(x: after.right - 1, y: after.top - 1)), "the item was on a lower screen: \(after)")
+    }
+
     @Test func `No screens at all, no spot`() {
         #expect(WidgetSpot.next(held: nil, isOpen: false, screens: [], opening: nil, item: nil, width: width) == nil)
     }

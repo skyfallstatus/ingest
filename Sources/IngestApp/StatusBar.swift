@@ -31,19 +31,20 @@ struct WidgetSpot: Equatable {
         }
         guard let screen = opening ?? screens.first else { return nil }
         let v = screen.visible
+        let item = item.flatMap { $0.intersects(screen.frame) ? $0 : nil }      // from a display that's gone, it says nothing about this one
         let right = min(max(item?.maxX ?? v.maxX, v.minX + 8 + width), v.maxX - 8)
         return WidgetSpot(screen: screen, right: right, top: min(item?.minY ?? v.maxY, v.maxY) - 6)
     }
 
-    /// The screen a click landed on. The very top of the top display reads as just outside it.
+    /// The screen a click landed on. A screen's top row counts as its own, not as the one stacked above it.
     static func screen(at p: NSPoint, in screens: [Screen]) -> Screen? {
-        screens.first { $0.frame.contains(p) } ?? screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(p) }
+        screens.first { p.x >= $0.frame.minX && p.x < $0.frame.maxX && p.y > $0.frame.minY && p.y <= $0.frame.maxY }
     }
 
     /// What a click hangs the widget from: the item's window if it's on that screen, and if it hasn't got there yet, the click.
     static func item(window: CGRect?, on screen: Screen, click: NSPoint) -> CGRect {
         if let window, window.intersects(screen.frame) { return window }
-        return CGRect(x: click.x - 8, y: screen.visible.maxY, width: 16, height: 0)
+        return CGRect(x: click.x - 8, y: screen.visible.maxY, width: 16, height: 1)
     }
 
     var room: CGFloat { screen.visible.height - 16 }
@@ -221,13 +222,13 @@ struct WidgetSpot: Equatable {
     }
 
     func show(_ page: LibraryView.Page) {
-        if !panel.isVisible { openForUser() }
+        if !panel.isVisible { openForUser(clickedAt: NSEvent.mouseLocation) }
         ui.feedback = nil
         ui.page = page
     }
 
     func show(_ feedback: FeedbackReport.Kind) {
-        if !panel.isVisible { openForUser() }
+        if !panel.isVisible { openForUser(clickedAt: NSEvent.mouseLocation) }
         ui.feedback = feedback
     }
 

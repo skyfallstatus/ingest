@@ -44,6 +44,16 @@ private final class Plugged: @unchecked Sendable {
     }
 }
 
+/// A drive that stops taking writes, from a fault hook on the engine's thread.
+private final class Dying: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var now: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
 /// A model, what's plugged into it, and a card with two files on it.
 @MainActor private final class Bench {
     let model: AppModel
@@ -340,6 +350,44 @@ private final class Plugged: @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(200))
         #expect(c.control.bytesChecked == before)
         #expect(!c.isMatching)
+    }
+
+    /// Everything the widget says about a card, for reading the way a person would.
+    private func said(_ c: CardSession, _ w: Bench) -> String {
+        let sheet = CardSheet.make(c, model: w.model)
+        return ([sheet.bottom.title, sheet.bottom.sentence, MenuBarState.make(w.model).word, MenuBarState.make(w.model).spoken]
+            + sheet.lines.flatMap { [$0.label] + $0.detail }).joined(separator: " | ")
+    }
+
+    // The owner's decision on N01. Plug back in, it checks, the rest copies, Safe, and it stays Safe. The first file was copied
+    // by a real job that never reached its seal, as a pulled cable or a crash leaves it.
+    @Test func `A job that was cut off finishes as if nothing happened`() async throws {
+        let w = Bench()
+        let whole = CardReader.read(root: w.card) { _ in .video }
+        var part = whole
+        part.listing.files = whole.listing.files.filter { $0.relPath == "one.bin" }
+        let job = Pipeline.makeJob(read: part, states: [:], cardName: "C", driveRoot: w.a, camera: nil, destination: Destination(footageRoot: "S"), probe: ProbeResult(hasVideo: true), index: nil)
+        let dying = Dying()
+        _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: w.a), control: IngestControl(),
+                                 hooks: FaultHooks(syncVolume: { _ in dying.now = true; return 0 }, journalFails: { dying.now })) { _ in }
+
+        let c = await w.ready()
+        await w.until("the rescan and the check") { !w.drive(w.driveA).isScanning && !c.isMatching && c.phase == .ready && { if case .verified? = c.states["one.bin"] { true } else { false } }() }
+        #expect(!c.weak, "a confirmed flush and a full read finished it")
+        #expect(c.filesToGo == 1, "and the other file is still owed")
+        #expect(!said(c, w).lowercased().contains("flush") && !said(c, w).lowercased().contains("cache"), "\(said(c, w))")
+
+        c.phase = .checking(done: 1, total: 1)
+        let checking = said(c, w).lowercased()
+        #expect(checking.contains("checking") && !checking.contains("flush") && !checking.contains("cache"), "\(checking)")
+        c.phase = .ready
+
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("Safe") { c.isSafe(on: w.model.workingDrive) }
+        #expect(c.issues.isEmpty, "\(c.issues)")
+        w.model.recheck(c)
+        await w.until("Safe again, from the start") { c.isSafe(on: w.model.workingDrive) }
+        #expect(c.issues.isEmpty, "\(c.issues)")
     }
 
     // The second review's B2: "didn't match" went out with no Copy button, in the very case the app exists for.

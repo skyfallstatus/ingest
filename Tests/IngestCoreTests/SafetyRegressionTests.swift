@@ -7,6 +7,14 @@ import Testing
 
 private let fm = FileManager.default
 
+/// What a fault hook saw, from the engine's thread.
+private final class Calls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Int] = []
+    var count: Int { lock.lock(); defer { lock.unlock() }; return values.count }
+    func add(_ v: Int) { lock.lock(); values.append(v); lock.unlock() }
+}
+
 /// A count a fault hook can keep from the engine's thread.
 private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
@@ -504,18 +512,18 @@ private func editMiddle(_ path: String) {
     #expect(out.weakVerification)
 }
 
-// The review's A-06: a job the drive wouldn't confirm was only marked afterwards, and that mark could fail too.
-@Test func aJobTheDriveWouldntConfirmStaysWeakEvenIfNothingMoreCanBeWritten() throws {
-    let card = temp(), drive = temp()
-    put(card + "/C0001.MP4", rnd(1_000_000))
-    let read = CardReader.read(root: card, kind: kind)
-    let dying = Flag()
-    let hooks = FaultHooks(syncVolume: { _ in dying.on = true; return 1 }, journalFails: { dying.on })
-    let same = Ledger(driveRoot: drive)
-    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: same, control: IngestControl(), hooks: hooks) { _ in }
-    #expect(out.weakVerification)
-    #expect(same.isWeak(drivePath: "S/C0001.MP4"), "this mount knows")
-    #expect(try laterVisit(card, drive).weak, "and so does the drive")
+// The review's A-06, as the owner decided it on 2026-11-02. A drive that said no is weak for good, and that has to be on the
+// drive. One that stopped answering looks like a pulled cable, so it's finished the way anything is: a confirmed flush, then a
+// full read. If the refusal itself couldn't be written, that's the case below, and SAFETY.md says so.
+@Test func aRefusalThatCantBeWrittenEndsLikeACutOffJob() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 1)
+    #expect(check(card, drive, read, flush: nil).weak, "a look holds")
+    #expect(check(card, drive, read, flush: 1).weak, "a refused flush holds")
+    // Which itself is on the record now, and that's for good. So this test takes a fresh copy for the last step.
+    let (card2, drive2, read2) = try cutOffCopy(flush: 1)
+    let later = check(card2, drive2, read2, flush: 0)
+    #expect(!later.weak, "a confirmed flush and a full read finish it: this is the risk SAFETY.md states")
+    #expect(end(read2, later, drive2) == .safe)
 }
 
 @Test func aJobTheDriveConfirmedIsNotWeak() throws {
@@ -526,14 +534,12 @@ private func editMiddle(_ path: String) {
     #expect(try laterVisit(card, drive).weak == false)
 }
 
-@Test func aSealThatCantBeWrittenLeavesTheJobWeak() throws {
-    let card = temp(), drive = temp()
-    put(card + "/C0001.MP4", rnd(1_000_000))
-    let read = CardReader.read(root: card, kind: kind)
-    let dying = Flag()
-    let hooks = FaultHooks(syncVolume: { _ in dying.on = true; return 0 }, journalFails: { dying.on })
-    #expect(try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }.weakVerification)
-    #expect(try laterVisit(card, drive).weak)
+@Test func aSealThatCantBeWrittenLeavesTheJobUnfinished() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    let ledger = Ledger(driveRoot: drive)
+    #expect(!ledger.isWeak(drivePath: "S/C0001.MP4"), "the drive said yes, so it isn't weak")
+    #expect(!unfinished(ledger, read, "S/C0001.MP4").isEmpty, "and it isn't finished")
+    #expect(!check(card, drive, read, flush: 0).weak)
 }
 
 @Test func aStoppedJobTheDriveConfirmedStaysStrong() throws {
@@ -1027,17 +1033,42 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     #expect(!r.weak)
 }
 
-// The reviews' N01 and A13: A-06 again. A drive that stops taking writes can't be told from one that was pulled, so a job
-// is only strong once it's sealed, and nothing has to reach the drive for it to stay weak.
-@Test func aDriveThatStopsTakingWritesBeforeTheEndLeavesTheJobWeak() throws {
+// N01, as the owner decided it. What a sealed job has is a confirmed flush and then a read, so that's what finishes a job that
+// was cut off, by a pulled cable or a crash. A real job on real files, stopped short of its seal.
+private func cutOffCopy(flush: Int32) throws -> (card: String, drive: String, read: CardRead) {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(1_000_000))
     let read = CardReader.read(root: card, kind: kind)
     let dying = Flag()
-    let hooks = FaultHooks(afterCopy: { _, _, _ in }, syncVolume: { _ in dying.on = true; return 1 }, journalFails: { dying.on })
+    let hooks = FaultHooks(syncVolume: { _ in dying.on = true; return flush }, journalFails: { dying.on })
     let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }
-    #expect(out.weakVerification)
-    #expect(try laterVisit(card, drive).weak)
+    #expect(out.weakVerification, "it can't say Safe this session")
+    #expect(try !ledgerText(drive).contains("sealed") && !ledgerText(drive).contains("refused"))
+    return (card, drive, read)
+}
+
+private func ledgerText(_ drive: String) throws -> String {
+    let folder = drive + "/.ingest/ledger/"
+    return try fm.contentsOfDirectory(atPath: folder).filter { $0.hasSuffix(".jsonl") }.map { try String(contentsOfFile: folder + $0, encoding: .utf8) }.joined()
+}
+
+private func unfinished(_ ledger: Ledger, _ read: CardRead, _ path: String) -> [String] {
+    let hash = ci_hash_uncached(read.listing.root + "/" + read.listing.files[0].relPath, nil, nil, nil)
+    return ledger.unfinishedJobs(drivePath: path, bytes: hash.bytes, hash: hexHash(hash.hash))
+}
+
+/// Reads the card's one file against its copy. `flush` nil is a look, which changes nothing. Otherwise that's the drive's answer.
+private func check(_ card: String, _ drive: String, _ read: CardRead, at path: String = "S/C0001.MP4", flush: Int32?, hooks more: FaultHooks = FaultHooks())
+    -> (states: [String: FileState], proofs: [String: Proof], weak: Bool) {
+    var hooks = more
+    if let flush, hooks.syncVolume == nil { hooks.syncVolume = { _ in flush } }
+    return IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], path, read.quick[read.listing.files[0].relPath]!)],
+                                ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: flush != nil, hooks: hooks) { _, _ in }
+}
+
+private func end(_ read: CardRead, _ r: (states: [String: FileState], proofs: [String: Proof], weak: Bool), _ drive: String) -> CardVerdict {
+    let issues = Pipeline.settle(issues: [], states: r.states, weak: r.weak, driveRoot: drive)
+    return Pipeline.conclude(read: read, states: r.states, proved: r.proofs, issues: issues, driveRoot: drive, kind: kind).verdict
 }
 
 private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throws -> LedgerEntry {
@@ -1051,35 +1082,189 @@ private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throw
     return e
 }
 
-@Test func aJobCutOffBeforeItsSealIsWeak() throws {
+@Test func aJobCutOffBeforeItsSealIsUnfinishedNotWeak() throws {
     let drive = temp()
-    _ = try jobCutOff(drive, sealed: false)
-    #expect(Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+    let e = try jobCutOff(drive, sealed: false)
+    let ledger = Ledger(driveRoot: drive)
+    #expect(!ledger.isWeak(drivePath: "S/a"))
+    #expect(ledger.unfinishedJobs(drivePath: "S/a", bytes: e.size, hash: e.hash) == ["CUT"])
+    #expect(ledger.hasUnfinished)
 }
 
 @Test func aJobTheDriveConfirmedStaysStrongOnALaterVisit() throws {
     let drive = temp()
-    _ = try jobCutOff(drive, sealed: true)
-    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+    let e = try jobCutOff(drive, sealed: true)
+    let later = Ledger(driveRoot: drive)
+    #expect(!later.isWeak(drivePath: "S/a"))
+    #expect(later.unfinishedJobs(drivePath: "S/a", bytes: e.size, hash: e.hash).isEmpty)
 }
 
-@Test func aRecordFromBeforeTheMarksIsNotCalledWeak() throws {
+@Test func aRecordFromBeforeTheMarksIsNeitherWeakNorUnfinished() throws {
     let drive = temp()
     let ledger = Ledger(driveRoot: drive)
     let journal = try ledger.open(LedgerHeader(job: "OLD", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
-    try journal.record(LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil))
+    let e = LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil)
+    try journal.record(e)
     journal.close()
-    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+    let later = Ledger(driveRoot: drive)
+    #expect(!later.isWeak(drivePath: "S/a"))
+    #expect(!later.hasUnfinished)
 }
 
-@Test func aJobStillRunningIsNotCalledWeak() throws {
+@Test func aJobStillRunningIsNeitherWeakNorUnfinished() throws {
     let drive = temp()
     let ledger = Ledger(driveRoot: drive)
     let journal = try ledger.open(LedgerHeader(job: "LIVE", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
     defer { journal.close() }
     try journal.begin()
     try journal.record(LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil))
-    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+    let other = Ledger(driveRoot: drive)
+    #expect(!other.isWeak(drivePath: "S/a"))
+    #expect(!other.hasUnfinished)
+}
+
+@Test func aSealThatCouldntBeWrittenIsUnfinishedOnThisMountToo() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    let dying = Flag()
+    let same = Ledger(driveRoot: drive)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: same, control: IngestControl(),
+                             hooks: FaultHooks(syncVolume: { _ in dying.on = true; return 0 }, journalFails: { dying.on })) { _ in }
+    #expect(!same.isWeak(drivePath: "S/C0001.MP4"), "the drive said yes")
+    #expect(same.hasUnfinished)
+}
+
+@Test func aLookWithNoFlushStillHolds() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    let before = try ledgerText(drive)
+    let look = check(card, drive, read, flush: nil)
+    if case .verified? = look.states["C0001.MP4"] {} else { Issue.record("the bytes are still proved") }
+    #expect(look.weak)
+    guard case .hold = end(read, look, drive) else { Issue.record("\(end(read, look, drive))"); return }
+    #expect(try ledgerText(drive) == before, "and a look writes nothing")
+    #expect(!unfinished(Ledger(driveRoot: drive), read, "S/C0001.MP4").isEmpty)
+}
+
+@Test func aConfirmedFlushThenAFullReadFinishesIt() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    let r = check(card, drive, read, flush: 0)
+    #expect(!r.weak)
+    #expect(end(read, r, drive) == .safe)
+}
+
+@Test func whatFinishedItStaysFinished() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    _ = check(card, drive, read, flush: 0)
+    #expect(try ledgerText(drive).contains("\"closes\""), "it's on the record")
+    let later = Ledger(driveRoot: drive)
+    #expect(unfinished(later, read, "S/C0001.MP4").isEmpty)
+    #expect(!later.hasUnfinished)
+    #expect(!check(card, drive, read, flush: nil).weak, "a later look needs no flush of its own")
+    #expect(check(card, drive, read, flush: 1).weak, "and a later refusal is still a refusal")
+}
+
+@Test func aRefusedFlushStillHoldsAndFinishesNothing() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    #expect(check(card, drive, read, flush: 1).weak)
+    #expect(try !ledgerText(drive).contains("\"closes\""))
+}
+
+@Test func aDriveThatSaidNoStaysWeakForGood() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    #expect(try ledgerText(drive).contains("\"refused\""))
+    for _ in 0..<2 {
+        let r = check(card, drive, read, flush: 0)
+        #expect(r.weak, "a confirmed flush later doesn't undo a no")
+        guard case .hold = end(read, r, drive) else { Issue.record("\(end(read, r, drive))"); return }
+    }
+}
+
+// The order is the point: bytes read before the drive confirmed anything aren't what it confirmed.
+@Test func theFlushComesBeforeTheRead() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    let copy = drive + "/S/C0001.MP4"
+    let good = try #require(fm.contents(atPath: copy))
+    let r = check(card, drive, read, flush: 0, hooks: FaultHooks(syncVolume: { _ in
+        var bad = good; bad[500_000] ^= 0xFF
+        try? bad.write(to: URL(fileURLWithPath: copy))       // what the drive turns out to have, once it's asked to finish
+        return 0
+    }))
+    if case .failed? = r.states["C0001.MP4"] {} else { Issue.record("a read taken before the flush would have passed this: \(String(describing: r.states["C0001.MP4"]))") }
+}
+
+// The prototype cleared on any clean check at all, so a check from before the job could finish it.
+@Test func aCheckFromBeforeTheCutOffFinishesNothing() throws {
+    let card = temp(), drive = temp()
+    let d = rnd(1_000_000)
+    put(card + "/C0001.MP4", d); put(drive + "/S/C0001.MP4", d)
+    let read = CardReader.read(root: card, kind: kind)
+    _ = check(card, drive, read, flush: 0)                       // a clean check, on the record
+    try fm.removeItem(atPath: drive + "/S/C0001.MP4")
+    let dying = Flag()
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                             hooks: FaultHooks(syncVolume: { _ in dying.on = true; return 0 }, journalFails: { dying.on })) { _ in }
+    #expect(!unfinished(Ledger(driveRoot: drive), read, "S/C0001.MP4").isEmpty)
+    #expect(check(card, drive, read, flush: nil).weak)
+}
+
+@Test func aCutOffCopyIsStillUnfinishedUnderANewName() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    try fm.moveItem(atPath: drive + "/S", toPath: drive + "/Renamed")
+    #expect(check(card, drive, read, at: "Renamed/C0001.MP4", flush: nil).weak)
+}
+
+@Test func aSealedCopyOfTheSameBytesIsNotHeldBack() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Again"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(unfinished(Ledger(driveRoot: drive), read, "Again/C0001.MP4").isEmpty, "that copy finished by itself")
+    #expect(!check(card, drive, read, at: "Again/C0001.MP4", flush: nil).weak)
+}
+
+@Test func aCloseThatCantBeWrittenClosesNothing() throws {
+    let (card, drive, read) = try cutOffCopy(flush: 0)
+    let r = check(card, drive, read, flush: 0, hooks: FaultHooks(journalFails: { true }))
+    #expect(r.weak, "nothing on the record, so nothing changed")
+    #expect(!unfinished(Ledger(driveRoot: drive), read, "S/C0001.MP4").isEmpty)
+}
+
+// Resume and Copy Again can meet the file in the job itself, which has to ask for the flush first too.
+@Test func aJobThatMeetsAnUnfinishedFileFinishesItTheSameWay() throws {
+    let (_, drive, read) = try cutOffCopy(flush: 0)
+    let order = Calls()
+    let copy = drive + "/S/C0001.MP4"
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                   hooks: FaultHooks(syncVolume: { _ in order.add(fm.contents(atPath: copy)?.count ?? 0); return 0 })) { _ in }
+    #expect(order.count == 2, "once before it reads, and once to seal")
+    #expect(!out.weakVerification)
+    #expect(try ledgerText(drive).contains("\"closes\""))
+    #expect(!Ledger(driveRoot: drive).hasUnfinished)
+}
+
+@Test func aJobThatMeetsAnUnfinishedFileOnARefusingDriveHolds() throws {
+    let (_, drive, read) = try cutOffCopy(flush: 0)
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    #expect(out.weakVerification)
+    #expect(try !ledgerText(drive).contains("\"closes\""))
+}
+
+@Test func aFinishedFileStaysFinishedIfItsOwnJobIsCutOffLater() throws {
+    let (_, drive, read) = try cutOffCopy(flush: 0)
+    let dying = Flag()
+    let calls = Counter()
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                             hooks: FaultHooks(syncVolume: { _ in if calls.next() == 2 { dying.on = true }; return 0 }, journalFails: { dying.on })) { _ in }
+    #expect(try !ledgerText(drive).contains("\"sealed\""), "the second job didn't reach its seal")
+    #expect(!Ledger(driveRoot: drive).hasUnfinished, "but it had already done what the first one needed")
+}
+
+// Nothing a person reads talks about flushes or caches.
+@Test func theWordsOnAHoldAreForAPerson() {
+    let message = Pipeline.settle(issues: [], states: [:], weak: true, driveRoot: "/x")[0].message.lowercased()
+    for word in ["flush", "cache", "sync", "journal"] { #expect(!message.contains(word), "\(word)") }
 }
 
 // The reviews' N02 and A12: inside `seal`, `sync` was the volume flush, so the job asked three times and heard the last.

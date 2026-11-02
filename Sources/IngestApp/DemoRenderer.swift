@@ -254,7 +254,7 @@ import SwiftUI
             c.ejectError = "Premiere Pro is using this card. Close it and try again."
             return c
         }
-        state("weak-drive") { hold(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This copy couldn't be checked as strictly as usual: a flush wasn't confirmed, or a cache wouldn't clear. Check the footage plays before formatting.")) }
+        state("weak-drive") { hold(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This drive couldn't confirm it has all of this copy, even though it matched when read. Check the footage plays before formatting.")) }
         state("red-part-missing") {
             let c = hold(CardIssue(severity: .hold, code: "red.missing-part", message: "RED clip A001_C004 is missing part 003, so it would play short.", paths: []))
             c.probe.clipChecks = ClipCheckReport(counts: [ClipCheckCount(kind: .redParts, format: "R3D", checked: 148, unconfirmed: 0)])

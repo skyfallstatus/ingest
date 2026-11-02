@@ -128,14 +128,14 @@ public enum IngestEngine {
                                     bytesCopied: control.bytesCopied, bytesTotal: total, currentName: name))
         }
 
-        func entry(_ item: IngestItem, hash: UInt64, bytes: UInt64, weak: Bool) -> LedgerEntry {
-            LedgerEntry(cardPath: item.file.relPath, drivePath: item.drivePath, size: bytes, quick: item.quick, hash: hexHash(hash), weak: weak ? true : nil)
+        func entry(_ item: IngestItem, hash: UInt64, bytes: UInt64, weak: Bool, closes: [String]? = nil) -> LedgerEntry {
+            LedgerEntry(cardPath: item.file.relPath, drivePath: item.drivePath, size: bytes, quick: item.quick, hash: hexHash(hash), weak: weak ? true : nil, closes: closes)
         }
 
         /// A file counts only once its proof is on the drive.
-        func accept(_ item: IngestItem, hash: UInt64, bytes: UInt64, stamp: DriveStamp?, weak thisWeak: Bool) {
+        func accept(_ item: IngestItem, hash: UInt64, bytes: UInt64, stamp: DriveStamp?, weak thisWeak: Bool, closes: [String]? = nil) {
             weak = weak || thisWeak
-            let line = entry(item, hash: hash, bytes: bytes, weak: thisWeak)
+            let line = entry(item, hash: hash, bytes: bytes, weak: thisWeak, closes: closes)
             do {
                 try journal.record(line)
                 recorded.append(line)
@@ -149,6 +149,9 @@ public enum IngestEngine {
                 states[item.file.relPath] = .failed("couldn't record the check on the drive")
             }
         }
+
+        // A file an earlier job left unfinished can turn up here, and a read only finishes it after a confirmed flush.
+        let first = ledger.hasUnfinished ? askToFlush(root, hooks) : (confirmed: false, refused: false)
 
         for (i, item) in job.items.enumerated() {
             if control.isStopped { break }
@@ -178,8 +181,12 @@ public enum IngestEngine {
                         ? "an empty file already has that name on the drive" : "a different file already has that name on the drive")
                     continue
                 }
-                let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath, bytes: both.card.bytes, hash: hexHash(both.card.hash))
-                accept(item, hash: both.card.hash, bytes: both.card.bytes, stamp: DriveStamp(both.drive.stamp), weak: thisWeak)
+                let hash = hexHash(both.card.hash)
+                let jobs = ledger.unfinishedJobs(drivePath: item.drivePath, bytes: both.card.bytes, hash: hash)
+                let thisWeak = (first.refused && !jobs.isEmpty) || !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath, bytes: both.card.bytes, hash: hash)
+                let closes = first.confirmed && !thisWeak && !jobs.isEmpty ? jobs : nil
+                weak = weak || (!jobs.isEmpty && closes == nil)
+                accept(item, hash: both.card.hash, bytes: both.card.bytes, stamp: DriveStamp(both.drive.stamp), weak: thisWeak, closes: closes)
                 ci_add_u64(control.copied, item.file.size)
                 continue
             }
@@ -284,10 +291,10 @@ public enum IngestEngine {
         ci_store_u64(control.checked, 0)
         // A copy made a moment ago may still be on its way, so the drive is asked first. A drive that won't say makes this
         // weak. One mounted read-only has nothing on its way. With `record` off this is a look, and it changes nothing.
-        let flushed = record ? hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) : 0
-        let unflushed = flushed != 0 && !root.isReadOnly
+        let first = record ? askToFlush(root, hooks) : (confirmed: false, refused: false)
         let journal = !record ? nil : try? ledger.open(LedgerHeader(job: UUID().uuidString, started: Date(), cardName: jobName, camera: nil,
                                                                     destination: "", app: "\(AppInfo.name) \(AppInfo.version)"))
+        journal?.fault = hooks.journalFails
         defer { journal?.close() }
         for (i, c) in candidates.enumerated() {
             if control.isStopped { break }
@@ -296,10 +303,14 @@ public enum IngestEngine {
             if both.cancelled { break }
             guard both.identical else { out[c.file.relPath] = .failed(both.whyNot); continue }   // looked the same, wasn't
             let hash = hexHash(both.card.hash)
-            let thisWeak = unflushed || !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
+            let thisWeak = first.refused || !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
             weak = weak || thisWeak
-            let line = LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes, quick: c.quick, hash: hash, weak: thisWeak ? true : nil)
+            // A file a cut-off job left is finished by what a sealed job has: a confirmed flush, then this read, on the record.
+            let jobs = ledger.unfinishedJobs(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
+            let closes = first.confirmed && !thisWeak && !jobs.isEmpty ? jobs : nil
+            let line = LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes, quick: c.quick, hash: hash, weak: thisWeak ? true : nil, closes: closes)
             let kept = (try? journal?.record(line)) != nil
+            if !jobs.isEmpty, closes == nil || !kept { weak = true }
             // A weak mark that won't stay on the drive can't stay weak on a later visit, so this can't count as proved.
             if record, thisWeak, journal == nil || !kept {
                 out[c.file.relPath] = .failed("couldn't record the check on the drive")
@@ -332,6 +343,13 @@ public enum IngestEngine {
             if !whole { return "it's shorter than the size the card lists" }
             return "the copy on the drive doesn't match the card"
         }
+    }
+
+    /// Asks the drive to finish what it's holding. `refused` means it said no. Neither means it couldn't say, as a volume
+    /// mounted read-only can't, which is no reason to doubt it and no confirmation either.
+    private static func askToFlush(_ root: ResolvedRoot, _ hooks: FaultHooks) -> (confirmed: Bool, refused: Bool) {
+        let rc = hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path)
+        return (rc == 0, rc != 0 && !root.isReadOnly)
     }
 
     /// The one read behind every proof: each side in full, from the device, while it stays in. Both paths are resolved,

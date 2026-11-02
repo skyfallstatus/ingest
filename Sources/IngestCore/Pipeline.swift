@@ -81,7 +81,7 @@ public enum Pipeline {
         }
         if weak {
             out.append(CardIssue(severity: .hold, code: "drive.weak-verify",
-                                 message: "This copy couldn't be checked as strictly as usual: a flush wasn't confirmed, or a cache wouldn't clear. Check the footage plays before formatting."))
+                                 message: "This drive couldn't confirm it has all of this copy, even though it matched when read. Check the footage plays before formatting."))
         }
         return out
     }

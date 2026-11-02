@@ -19,6 +19,33 @@ struct SetupRequest: Identifiable {
     let drive: DriveState?
 }
 
+/// A page that scrolls if it has to, and hangs from the top while the widget changes height around it. The page is laid out at
+/// its final size at once, and only the edge that reveals it moves, so what's on the page doesn't. SwiftUI animates where a view
+/// is drawn, not how it's laid out, so a plain animated frame snapped to size and slid the page in from the middle.
+struct TopAlignedScroll<Content: View>: View {
+    var height: CGFloat
+    var animation: Animation? = nil
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView { content }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollIndicators(.never)
+            .frame(height: height)
+            .animation(animation) { $0.modifier(RevealedHeight(height: height)) }
+    }
+}
+
+/// Called on every frame with the height in between, which is what lets the bottom edge really move.
+struct RevealedHeight: ViewModifier, Animatable {
+    var height: CGFloat
+    var animatableData: CGFloat {
+        get { height }
+        set { height = newValue }
+    }
+    func body(content: Content) -> some View { content.frame(height: height, alignment: .top).clipped() }
+}
+
 /// The widget. Only ever about the cards in front of you; History and the rest slide in behind one quiet control.
 struct PanelView: View {
     @Environment(AppModel.self) private var model
@@ -27,17 +54,13 @@ struct PanelView: View {
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        ScrollView {
+        TopAlignedScroll(height: min(contentHeight, ui.maxBodyHeight), animation: reduceMotion || Motion.off ? nil : .easeInOut(duration: 0.28)) {     // done before the window shrinks: see `fit`
             content
                 .background(GeometryReader { g in Color.clear.preference(key: ContentHeight.self, value: g.size.height) })
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .scrollIndicators(.never)
-        .frame(height: min(contentHeight, ui.maxBodyHeight))
         .frame(width: Grid.width)
         .background(Color.surface)
         .foregroundStyle(Color.ink)
-        .quietAnimation(contentHeight, reduceMotion: reduceMotion, duration: 0.3)
         .onPreferenceChange(ContentHeight.self) { h in
             contentHeight = h
             ui.onHeight?(min(h, ui.maxBodyHeight))

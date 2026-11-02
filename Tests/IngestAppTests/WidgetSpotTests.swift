@@ -152,3 +152,83 @@ private func open(on screen: WidgetSpot.Screen, item: CGRect) throws -> WidgetSp
         #expect(b.title.isEmpty && !b.isBordered, "nothing drawn but the symbol")
     }
 }
+
+// A static layout can't show this: it only went wrong while the height was changing. So this runs the real animation, in a
+// window nobody can see, and looks at the pixels of every frame.
+@MainActor @Observable private final class Room { var height: CGFloat = 100 }
+
+private struct AnimatedPage: View {
+    let room: Room
+    var body: some View {
+        TopAlignedScroll(height: room.height, animation: .easeInOut(duration: 0.28)) { Color.red.frame(height: room.height) }
+            .frame(width: 100)
+            .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+@Suite("A page in the widget", .serialized) @MainActor struct PageLayoutTests {
+    /// The first and last red rows, from the top.
+    private func redRows(_ host: NSView) -> (first: Int, last: Int)? {
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scale = host.bounds.height / CGFloat(rep.pixelsHigh)
+        let x = rep.pixelsWide / 2
+        var rows: [Int] = []
+        for y in 0 ..< rep.pixelsHigh {
+            if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.redComponent > 0.7, c.greenComponent < 0.4, c.alphaComponent > 0.5 {
+                rows.append(Int(CGFloat(y) * scale))
+            }
+        }
+        return rows.first.flatMap { f in rows.last.map { (f, $0) } }
+    }
+
+    /// Changes the height, and returns where the top and the bottom of the page were on every frame until it settled.
+    private func frames(from: CGFloat, to: CGFloat) -> [(first: Int, last: Int)] {
+        _ = NSApplication.shared
+        let room = Room()
+        room.height = from
+        let host = NSHostingView(rootView: AnimatedPage(room: room))
+        let window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 100, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.contentView = host
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        room.height = to
+        var seen: [(first: Int, last: Int)] = []
+        let end = Date().addingTimeInterval(0.5)
+        while Date() < end {
+            RunLoop.main.run(until: Date().addingTimeInterval(1.0 / 120))
+            if let r = redRows(host) { seen.append(r) }
+        }
+        return seen
+    }
+
+    private func smooth(_ bottoms: [Int], from: Int, to: Int) -> Bool {
+        let inBetween = Set(bottoms).filter { $0 > min(from, to) + 2 && $0 < max(from, to) - 2 }
+        return inBetween.count >= 4
+    }
+
+    @Test func `Growing, the top holds and only the bottom moves, in steps`() {
+        let seen = frames(from: 100, to: 400)
+        #expect(!seen.isEmpty)
+        #expect(seen.allSatisfy { $0.first == 0 }, "\(seen.map(\.first).filter { $0 != 0 }.prefix(8))")
+        #expect(smooth(seen.map(\.last), from: 100, to: 400), "\(seen.map(\.last))")
+        #expect(abs((seen.last?.last ?? 0) - 399) <= 1, "\(String(describing: seen.last))")
+    }
+
+    @Test func `Shrinking, the top holds and only the bottom moves, in steps`() {
+        let seen = frames(from: 400, to: 100)
+        #expect(!seen.isEmpty)
+        #expect(seen.allSatisfy { $0.first == 0 }, "\(seen.map(\.first).filter { $0 != 0 }.prefix(8))")
+        #expect(abs((seen.last?.last ?? 0) - 99) <= 1, "\(String(describing: seen.last))")
+    }
+
+    @Test func `The bottom edge in between is real layout, not a drawn position`() {
+        var m = RevealedHeight(height: 100)
+        m.animatableData = 250
+        #expect(m.height == 250)
+        #expect(m.animatableData == 250)
+    }
+}

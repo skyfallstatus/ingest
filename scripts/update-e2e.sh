@@ -13,6 +13,7 @@ SERVER=""
 cleanup() {
   pkill -f "$W/app/Ingest.app" 2>/dev/null
   [[ -n $SERVER ]] && kill $SERVER 2>/dev/null
+  for dev in $(hdiutil info | awk -v id=$ID '/^image-path/ { mine = index($0, id) > 0 } mine && /^\/dev\/disk[0-9]+\t/ { print $1 }'); do hdiutil detach -quiet -force $dev; done
   defaults delete $ID 2>/dev/null
   rm -rf ~/Library/Caches/$ID ~/Library/HTTPStorages/$ID ~/Library/Preferences/$ID.plist "$HOME/Library/Application Support/$ID"
   [[ -d $W/src ]] && /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u $W/app/Ingest.app 2>/dev/null
@@ -94,18 +95,23 @@ check "on disk it's 0.2, in the same place" '[[ $(version) == 0.2 ]]'
 check "it's a new process" '[[ -n $(running) && $(running) != $OLD ]]'
 check "settings kept" 'grep "^0.2 .* launched" $W/log | grep -q "opensOnCardIn=false"'
 
-say_ "--- a tampered update"
-python3 -I - $W/site/Ingest.dmg <<'PY'
-import sys
-p=sys.argv[1]; d=bytearray(open(p,'rb').read()); d[len(d)//2]^=0xFF; open(p,'wb').write(d)
-PY
+attached() { hdiutil info | grep '^image-path' | grep -c $ID }
+pkill -f "$W/app/Ingest.app" 2>/dev/null; sleep 1
+check "a finished update leaves no image attached" '[[ $(attached) == 0 ]]'
+say_ "      attached: $(attached)"
+
+say_ "--- a well-formed update with the wrong contents"
+touch $W/new/extra-file             # the image is valid, and these aren't the bytes that were signed
+package
+rm -f $W/new/extra-file
 start plain
 check "the old build launched" 'wait_for "^0.1 .* launched" 30'
 check "it found the update" 'wait_for "found 0.2" 60'
 check "it was fetched, then given up on" 'wait_for "downloaded" 60 && wait_for "dismissed\|error:" 60'
 sleep 2
 check "it never got as far as ready" '! grep -q "ready:" $W/log'
-say_ "      $(grep -E "error:|dismissed" $W/log | head -2 | cut -c1-110)"
+check "the signature is what stopped it" 'grep -qi "sign" $W/log'
+say_ "      $(grep -E "error:" $W/log | head -1 | cut -c1-110)"
 check "the old version is still on disk" '[[ $(version) == 0.1 ]]'
 check "and still running" '[[ -n $(running) ]]'
 check "nothing restarted" '! grep -q "restarting" $W/log'
@@ -119,11 +125,13 @@ check "the update was ready first" 'wait_for "ready: Ingest 0.2 is ready" 60'
 check "the job started" 'wait_for "job running" 60'
 check "Restart was refused during it" 'wait_for "refused during a job on CARD" 30'
 check "and said why" 'grep -q "It can restart once CARD is done" $W/log'
-check "the app didn't restart for it" '[[ $(version) == 0.1 ]] && ! grep -q "^0.2 " $W/log'
-check "it only went after the job" 'wait_for "the job is done" 180 && grep -n "the job is done\|restarting" $W/log | head -1 | grep -q "the job is done"'
+check "the job ended" 'wait_for "the job is done" 180'
+check "it only restarted after that" 'wait_for "^0.2 .* launched" 180'
+check "in that order" '[[ $(grep -n "refused during" $W/log | cut -d: -f1) -lt $(grep -n "the job is done" $W/log | cut -d: -f1) && $(grep -n "the job is done" $W/log | cut -d: -f1) -lt $(grep -n "^0.2 " $W/log | head -1 | cut -d: -f1) ]]'
 say_ "      $(grep 'refused during' $W/log | cut -c1-110)"
-check "once the job was done it restarted" 'wait_for "^0.2 .* launched" 180'
 check "the copy finished" 'cmp -s $W/card/CLIP/big.bin $W/drive/S/CLIP/big.bin'
 
+pkill -f "$W/app/Ingest.app" 2>/dev/null; sleep 1
+say_ "      attached at the end: $(attached)"
 say_ "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))

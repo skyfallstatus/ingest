@@ -109,6 +109,9 @@ case "ingest":
     let proofs = confirmed.proofs.merging(out.proofs) { _, new in new }
     let (verdict, final, _) = Pipeline.conclude(read: read, states: states, proved: proofs, issues: issues, driveRoot: drive, kind: kind)
     print("after:", tally(final), "cancelled:", out.cancelled, "weak:", weak)
+    for (rel, state) in final.sorted(by: { $0.key < $1.key }) where stateName(state) != "verified" {
+        print("not proved:", rel, stateName(state), "was", stateName(states[rel]))
+    }
     print(verdictLine(verdict))
 
 case "timings":

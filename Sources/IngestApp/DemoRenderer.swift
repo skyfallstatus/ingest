@@ -126,14 +126,15 @@ import SwiftUI
     }
 
     /// Settles the view, measures it, and draws it. Offscreen, so controls look inactive.
-    static func pixels<V: View>(_ view: V, model: AppModel, dark: Bool = true, ui: PanelUI? = nil) -> Data? {
+    static func pixels<V: View>(_ view: V, model: AppModel, dark: Bool = true, ui: PanelUI? = nil, clear: Bool = false) -> Data? {
         NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let root = view.environment(model).environment(ui ?? PanelUI()).environment(\.colorScheme, dark ? .dark : .light)
         let host = NSHostingView(rootView: root)
         host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         w.appearance = host.appearance
-        w.backgroundColor = NSColor(Color.surface)
+        w.isOpaque = !clear
+        w.backgroundColor = clear ? .clear : NSColor(Color.surface)
         w.contentView = host
         RunLoop.main.run(until: Date().addingTimeInterval(0.06))
         var size = host.fittingSize
@@ -143,18 +144,26 @@ import SwiftUI
             RunLoop.main.run(until: Date().addingTimeInterval(0.06))
             size = host.fittingSize
         }
+        return grab(host).flatMap(png)
+    }
+
+    private static func grab(_ host: NSView) -> NSBitmapImageRep? {
         host.layoutSubtreeIfNeeded()
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(host.bounds.width * 2), pixelsHigh: Int(host.bounds.height * 2),
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                          bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         rep.size = host.bounds.size     // 2x, whatever the screen the render happens to run on
         host.cacheDisplay(in: host.bounds, to: rep)
-        // The window draws in the display's colour space. A PNG in that space would read as a different green.
-        let srgb = rep.converting(to: .sRGB, renderingIntent: .perceptual) ?? rep
-        return srgb.representation(using: .png, properties: [:])
+        return rep
+    }
+
+    /// The window draws in the display's colour space. A PNG in that space would read as a different green.
+    private static func png(_ rep: NSBitmapImageRep) -> Data? {
+        (rep.converting(to: .sRGB, renderingIntent: .perceptual) ?? rep).representation(using: .png, properties: [:])
     }
 
     static func run(to dir: String) {
+        if CommandLine.arguments.contains("--media") { media(to: dir); return }
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -399,5 +408,130 @@ import SwiftUI
         }
         .frame(width: 420)
         save(sheet, "menu-bar" + (dark ? "-dark" : ""), dir, model: model, dark: dark)
+    }
+
+    // MARK: The README's pictures, from scripts/render-media.sh
+
+    /// The widget as `StatusBar` hangs it, with the same edge and shadow. `cacheDisplay` draws a shadow's offset upside down,
+    /// so here `y` is negative to fall where it falls on screen.
+    private struct Hung: View {
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: Grid.radius, style: .continuous)
+            PanelView().clipShape(shape).overlay(shape.strokeBorder(Color.line, lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.08), radius: 3, y: -1)
+                .shadow(color: .black.opacity(0.2), radius: 22, y: -12)
+        }
+    }
+
+    /// A slim piece of menu bar with the real mark in it. The widget hangs as `WidgetSpot` hangs it: level with the item's
+    /// right edge, 6 pt below it, there while a card is in, and with no animation of its own.
+    private struct Stage: View {
+        @Environment(AppModel.self) private var model
+        static let size = CGSize(width: 400, height: 412)
+
+        var body: some View {
+            let open = !model.cards.isEmpty
+            let bar = RoundedRectangle(cornerRadius: 9, style: .continuous)
+            VStack(alignment: .trailing, spacing: 6) {
+                Image(nsImage: MenuBarArt.image(for: MenuBarState.make(model))).renderingMode(.template).foregroundStyle(Color.ink)
+                    .padding(.horizontal, 8).frame(height: 22)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.ink.opacity(open ? 0.1 : 0)))
+                    .padding(.trailing, 20).frame(width: 360, height: 26, alignment: .trailing)
+                    .background(bar.fill(Color.foot).overlay(bar.strokeBorder(Color.line, lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.08), radius: 3, y: -1).shadow(color: .black.opacity(0.1), radius: 8, y: -3))
+                    .padding(.trailing, -20).zIndex(1)     // the menu bar stays above the widget's shadow
+                Hung().opacity(open ? 1 : 0)
+            }
+            .padding(.top, 12).padding(.trailing, 40)
+            .frame(width: Self.size.width, height: Self.size.height, alignment: .topTrailing)
+        }
+    }
+
+    /// A copy `files` files in, proved one at a time in card order as the engine reports it, at a steady staged speed.
+    private static func copied(_ c: CardSession, _ files: Int) {
+        let size = bytes / 148, done = UInt64(files) * size
+        c.liveBytes = files == 148 ? c.totalBytes : done + size / 2
+        c.liveChecked = done
+        c.startedAt = Date().addingTimeInterval(-Double(c.liveBytes + c.liveChecked) / 640e6)
+        c.progress = IngestProgress(phase: .copying, fileIndex: files + 1, fileCount: 148, verifiedFiles: files, bytesCopied: c.liveBytes, bytesTotal: bytes, currentName: "")
+    }
+
+    private static func shorter(_ c: CardSession) -> CardSession {
+        if c.shootLabel != nil { c.shootLabel = "Lantern Bakery Co. / 22.10.26 Menu" }      // fits the line beside Show in Finder
+        return c
+    }
+
+    /// Stills on nothing, then the card's whole run filmed as it happens: SwiftUI's own animations can't be stepped by hand.
+    private static func media(to dir: String) {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.prohibited)
+        try? FileManager.default.createDirectory(atPath: dir + "/frames", withIntermediateDirectories: true)
+        let model = AppModel()
+        model.isDemo = true
+        _ = drive(model)
+
+        Motion.off = true
+        func still(_ name: String, dark: Bool = false, _ make: () -> CardSession) {
+            model.cards = [shorter(make())]
+            let view = Hung().padding(EdgeInsets(top: 28, leading: 40, bottom: 56, trailing: 40))
+            try? pixels(view, model: model, dark: dark, clear: true)?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+        }
+        still("widget-reading") { card(phase: .reading(done: 61, total: 148), read: false) }
+        still("widget-copying") { let c = named(card(phase: .copying)); copied(c, 52); return c }
+        still("widget-safe", safe)
+        still("widget-safe-dark", dark: true, safe)
+        model.cards = []
+        Motion.off = false
+
+        let c = card(phase: .reading(done: 0, total: 148), read: false)
+        let listing = card(phase: .ready).read
+        func beat(_ t: Double) {
+            switch t {
+            case ..<0.8: break
+            case ..<1.9:
+                if model.cards.isEmpty { model.cards = [c] }
+                c.phase = .reading(done: Int((t - 0.8) / 1.1 * 148), total: 148)
+            case ..<2.55:
+                c.read = listing
+                c.isMatching = true
+                c.phase = .reading(done: 148, total: 148)
+            case ..<6.75:
+                if c.phase != .copying { c.isMatching = false; c.phase = .copying; _ = shorter(named(c)) }
+                copied(c, Int((t - 2.55) / 4.2 * 148))     // lands on 96 left, the word the README quotes
+            case ..<7.5:
+                c.liveBytes = c.totalBytes
+                c.progress = IngestProgress(phase: .finishing, fileIndex: 148, fileCount: 148, verifiedFiles: 148, bytesCopied: bytes, bytesTotal: bytes, currentName: "")
+            default:
+                guard c.phase != .finished else { return }
+                for f in listing?.listing.files ?? [] { c.states[f.relPath] = .verified(drivePath: "x", hash: "0", bytes: f.size) }
+                c.progress = nil
+                c.phase = .finished
+                c.verdict = .safe
+            }
+        }
+
+        let host = NSHostingView(rootView: Stage().environment(model).environment(PanelUI()).environment(\.colorScheme, .light))
+        host.appearance = NSAppearance(named: .aqua)
+        NSApp.appearance = host.appearance
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: Stage.size), styleMask: [.borderless], backing: .buffered, defer: false)
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.appearance = host.appearance
+        w.contentView = host
+
+        let length = 11.0, rate = 15.0, start = Date()
+        var shots: [(at: Double, rep: NSBitmapImageRep)] = []
+        var now = 0.0
+        while now < length {
+            beat((now / 0.15).rounded(.down) * 0.15)        // the app reads its counters this often
+            RunLoop.main.run(until: start.addingTimeInterval((now * rate + 1).rounded(.down) / rate))
+            now = Date().timeIntervalSince(start)
+            if let rep = grab(host) { shots.append((now, rep)) }
+        }
+        for (i, s) in shots.enumerated() {
+            let ms = Int(((i + 1 < shots.count ? shots[i + 1].at : length) - s.at) * 1000)
+            try? png(s.rep)?.write(to: URL(fileURLWithPath: dir + String(format: "/frames/%04d-%d.png", i, max(ms, 1))))
+        }
+        NSApp.terminate(nil)
     }
 }

@@ -2,7 +2,19 @@
 
 A small menu bar app for macOS. It copies a camera card to your working drive, reads both sides back in full, and tells you when the card is safe to format.
 
+<p align="center">
+  <img src="docs/media/demo.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. A card goes in and the word beside the icon goes from Reading to a falling count such as 96 left, then Checking, then Safe to format. A small widget hangs under the icon, counting 148 files and 61.2 GB onto a drive called Field SSD and reading them back, until its ticks turn green and its bottom line says Safe to format.">
+</p>
+
 It lives in the menu bar as a card icon and a word: `Reading`, `96 left`, `Checking`, `Safe to format`. Click it for a small widget that shows the same numbers line by line, with the verdict at the bottom. There's no main window and no Dock icon.
+
+<p align="center">
+  <img src="docs/media/widget-copying.png" width="380" align="top" alt="The widget partway through card A082. 148 files and 61.2 GB are on the card, 52 files are on Field SSD and read back from both sides, with a grey progress bar. The bottom line says Don't format: 96 files are only on this card.">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/widget-safe-dark.png">
+    <img src="docs/media/widget-safe.png" width="380" align="top" alt="The widget with card A082 finished. Every line shows a green tick and matching figures of 148 files and 61.2 GB, and 148 of 148 MP4s have an index. The bottom line is green and says Safe to format, with an Eject button.">
+  </picture>
+</p>
 
 **Status:** private beta. Please read [what not to rely on yet](#what-not-to-rely-on-yet).
 

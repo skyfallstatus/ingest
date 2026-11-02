@@ -17,7 +17,7 @@ WHAT TO EXPECT
 - There's no window and no Dock icon. Ingest lives in the menu bar, as a card icon. Click it for the widget. If the menu bar is full and the icon is hidden, open Ingest from Applications again.
 - The first time it reads a card or a drive, macOS asks whether it may read removable volumes. Say yes. Each new beta build asks again.
 - Your working drive can be exFAT, APFS or HFS+. FAT32 works, but refuses files of 4 GB or more.
-- It needs macOS 14 or later, but it has only been tested on macOS 27. macOS 14 and 15 are untested, these install steps included, so please say which version you're on if you report anything.
+- It needs macOS 14 or later, but it has only been tested on macOS 27. macOS 14, 15 and 26 are untested, these install steps included, so please say which version you're on if you report anything.
 - On your drive it leaves .ingest, a hidden folder with your folder setup and a record of what was copied, and ascmhl beside each card's footage, the checksum manifest. Your cards are never written to.
 
 BEFORE YOU FORMAT ANYTHING

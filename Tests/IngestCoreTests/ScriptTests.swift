@@ -48,7 +48,7 @@ private func executable(_ path: String, _ text: String) throws {
 @Test func everyNoteToATesterSaysWhichMacOSIsUntested() throws {
     for rel in ["BETA.md", "README.md", "Resources/dmg/Read Me First.txt"] {
         let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
-        #expect(text.contains("macOS 14 and 15 are untested"), "\(rel)")
+        #expect(text.contains("macOS 14, 15 and 26 are untested"), "\(rel)")
     }
 }
 
@@ -84,6 +84,7 @@ private func executable(_ path: String, _ text: String) throws {
     }
     let beta = try String(contentsOf: repo.appendingPathComponent("BETA.md"), encoding: .utf8)
     #expect(beta.contains("Plug it back in"))
+    #expect(beta.contains("doesn't match"), "and what happens if something really was lost")
     let rules = try String(contentsOf: repo.appendingPathComponent("docs/SAFETY.md"), encoding: .utf8)
     #expect(rules.contains("refused") && rules.contains("unfinished") && rules.contains("A refusal that couldn't be recorded"))
 }

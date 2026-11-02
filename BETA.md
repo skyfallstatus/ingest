@@ -18,7 +18,7 @@ It leaves two things on your drive: `.ingest`, a hidden folder with your setup a
 
 ## Which Mac
 
-Ingest has only been tested on macOS 27. macOS 14 and 15 are untested, including the install steps above, though it says macOS 14 or later. If you're on either, please say so when you report anything: the report carries your version, and your Mac is especially useful.
+Ingest has only been tested on macOS 27. macOS 14, 15 and 26 are untested, including the install steps above, though it says macOS 14 or later. If you're on any of them, please say so when you report anything: the report carries your version, and your Mac is especially useful.
 
 ## Please don't rely on it yet
 
@@ -26,9 +26,9 @@ Ingest has only been tested on macOS 27. macOS 14 and 15 are untested, including
 
 Clips aren't played. It proves the bytes match, and a clip that was already broken in camera will match perfectly. Open a few clips, as you normally would.
 
-If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault. If the drive is pulled during a copy, or the app crashes, nothing is lost. Plug it back in, or open the app again. Ingest checks what's already there by reading it, you carry on the copy for whatever's left, and it goes to Safe.
+If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault. If the drive is pulled during a copy, or the app crashes, nothing is lost. Plug it back in, or open the app again. Ingest checks what's already there by reading it, you carry on the copy for whatever's left, and it goes to Safe. If the drive really did lose something, Ingest won't say Safe: it names the file that doesn't match. Choose another folder, or remove the bad copy and copy again, and it goes to Safe once every file matches.
 
-**Have a look** that stays on a drive means the drive itself refused to say it had finished writing. That one doesn't clear, so check the footage plays, or copy the card to another drive.
+If the drive line says **Have a look** and it doesn't clear, the drive refused to say it had finished writing, or a copy couldn't be read fresh from the disk. Check the footage plays, or copy the card to another drive. A hold on the clips, such as a missing RED part, comes from the card, so another drive won't clear that one.
 
 Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 

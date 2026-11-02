@@ -179,7 +179,181 @@ private final class Plugged: @unchecked Sendable {
         w.model.lookAgain()
         await w.until("the look") { c.verdict != .safe }
         #expect(!c.isSafe(on: w.model.workingDrive))
-        #expect(c.states["one.bin"] == .missing)
+        if case .verified? = c.states["one.bin"] { Issue.record("a changed copy can't stay proved") }
+    }
+
+    // The review's A3: a look during a match was dropped, so green stood over a changed copy. Also the flaky test.
+    @Test func `A look during a match isn't lost`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the rescan") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        c.isMatching = true
+        let h = FileHandle(forUpdatingAtPath: w.a + "/S/one.bin")!
+        try h.seek(toOffset: 5000); try h.write(contentsOf: Data([1, 2, 3])); try h.close()
+        w.model.lookAgain()
+        #expect(c.needsRematch)
+        c.isMatching = false
+        c.needsRematch = false
+        await w.model.matchCard(c)
+        #expect(!c.isSafe(on: w.model.workingDrive))
+        #expect(c.verdict != .safe)
+    }
+
+    // The review's A5: a file that lost its proof was called only on the card, and nothing read it again.
+    @Test func `A file that lost its proof is read again, and comes back by itself`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        await w.until("the rescan") { !c.isMatching && !w.drive(w.driveA).isScanning }
+        let before = c.control.bytesChecked
+        #expect(utimes(w.a + "/S/one.bin", nil) == 0)      // same bytes, a new time
+        w.model.lookAgain()
+        await w.until("it to be read and go green") { c.isSafe(on: w.model.workingDrive) && c.control.bytesChecked != before }
+        #expect(c.control.bytesChecked == 1_000_000, "the one file, and only that one")
+    }
+
+    // The review's N03: the rescan after a job turned the reason into nothing.
+    @Test func `A failed copy keeps its reason through the rescan`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        put(w.a + "/S/one.bin", rnd(1_000_000))         // same name, other bytes
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("the job and its rescan") { !c.isBusy && !c.isMatching && c.progress != nil && !w.drive(w.driveA).isScanning }
+        try await Task.sleep(for: .milliseconds(200))
+        await w.until("it to settle") { !c.isMatching }
+        guard case .failed(let why)? = c.states["one.bin"] else { Issue.record("\(String(describing: c.states["one.bin"]))"); return }
+        #expect(why.contains("name on the drive") || why.contains("match"), "\(why)")
+        let sheet = CardSheet.make(c, model: w.model)
+        let said = ((sheet.line(.drive)?.detail ?? []) + (sheet.line(.readDrive)?.detail ?? [])).joined()
+        #expect(said.contains("one.bin"), "\(said)")
+    }
+
+    // The review's N04.
+    @Test func `A drive that comes back carries on, and stops saying it's unplugged`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        w.driveA.anchor?.retire()
+        w.plugged.now = [(w.cardVolume, .card)]
+        await w.model.refresh()
+        await w.until("it to stop") { !c.isBusy }
+        #expect(c.error?.contains("unplugged") == true)
+        let back = volume(w.a, "DRIVE-A")
+        w.model.stores.workingDriveKey = back.key
+        w.plugged.now = [(w.cardVolume, .card), (back, .drive)]
+        await w.model.refresh()
+        #expect(c.error == nil)
+        #expect(!c.control.isStopped)
+        await w.until("it to settle") { !c.isMatching && c.phase == .ready }
+    }
+
+    // The review's N06.
+    @Test func `A card back before its job has stopped gets a new session`() async throws {
+        let w = Bench()
+        put(w.card + "/big.bin", rnd(400_000_000))
+        let c = await w.ready()
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("copying") { c.phase == .copying && (c.progress?.verifiedFiles ?? 0) >= 1 }
+        c.volume.anchor?.retire()
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        w.plugged.now = [(volume(w.card, "CARD"), .card), (w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        await w.until("a new session") { w.model.cards.first.map { $0 !== c && !$0.volumeGone } ?? false }
+    }
+
+    // The review's N07.
+    @Test func `A card taken out after a job ended short isn't said to have gone mid-copy`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        put(w.a + "/S/one.bin", rnd(1_000_000))
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("the job") { !c.isBusy && c.phase == .ready && !c.isMatching && c.progress != nil }
+        c.volume.anchor?.retire()
+        w.plugged.now = [(w.driveA, .drive), (w.driveB, .drive)]
+        await w.model.refresh()
+        #expect(c.error?.contains("while copying") == false, "\(c.error ?? "")")
+        #expect(c.error?.contains("read again") == true, "\(c.error ?? "")")
+    }
+
+    // The review's N08.
+    @Test func `First-run setup waits for a volume it has to ask about`() async {
+        let w = Bench()
+        var met = false
+        w.model.onFirstLook = { met = true }
+        w.plugged.now = [(w.driveA, .maybeCard("Camera folders next to 3 other folders"))]
+        await w.model.refresh()
+        #expect(!met)
+        w.plugged.now = [(w.driveA, .drive)]
+        await w.model.refresh()
+        #expect(met)
+    }
+
+    // The review's N09: every re-inserted card now takes this path, and it can be long.
+    @Test func `A check keeps the Mac awake, can be stopped, and says when it's done`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        w.model.recheck(c)
+        var awake = false
+        await w.until("Safe again") {
+            awake = awake || w.model.isKeepingAwake
+            return c.isSafe(on: w.model.workingDrive)
+        }
+        #expect(awake)
+        #expect(!w.model.isKeepingAwake, "and lets it sleep after")
+        #expect(w.model.notified.filter { $0.contains("safe to format") }.count == 2, "\(w.model.notified)")
+        c.phase = .checking(done: 0, total: 2)
+        #expect(CardSheet.make(c, model: w.model).bottom.action == .stop)
+        c.phase = .finished
+    }
+
+    @Test func `A stopped check says so, and Resume starts it again`() async throws {
+        let w = Bench()
+        let c = await w.safe()
+        w.model.recheck(c)
+        c.control.stop()
+        await w.until("it to stop") { c.phase == .stopped }
+        let sheet = CardSheet.make(c, model: w.model)
+        #expect(sheet.bottom.sentence.hasPrefix("Stopped.") && sheet.bottom.sentence.contains("to check"), "\(sheet.bottom.sentence)")
+        #expect(sheet.line(.drive)?.actions == [.resume])
+        w.model.resume(c)
+        await w.until("Safe again") { c.isSafe(on: w.model.workingDrive) }
+    }
+
+    // The review's N10.
+    @Test func `A plugged-in drive that isn't offered says why`() async {
+        let w = Bench()
+        var read = volume(w.a, "NTFS"); read.isReadOnly = true
+        w.plugged.now = [(read, .ignored)]
+        await w.model.refresh()
+        #expect(w.model.ignored.map(\.name) == ["NTFS"])
+        #expect(CardSheet.idle(model: w.model).sentence.contains("read-only"))
+    }
+
+    // The review's N12.
+    @Test func `Safe says which of two drives with one name`() async {
+        let w = Bench()
+        let first = temp() + "/SHOOT SSD", second = temp() + "/SHOOT SSD 1"
+        try! FileManager.default.createDirectory(atPath: first, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(atPath: second, withIntermediateDirectories: true)
+        let one = volume(first, "ONE", name: "SHOOT SSD"), two = volume(second, "TWO", name: "SHOOT SSD")
+        w.plugged.now = [(w.cardVolume, .card), (one, .drive), (two, .drive)]
+        await w.model.refresh()
+        let c = w.model.cards[0]
+        w.model.use(drive: w.drive(two))
+        await w.until("the card") { c.phase == .ready && !c.isMatching }
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("Safe") { c.isSafe(on: w.model.workingDrive) }
+        #expect(MenuBarState.make(w.model).spoken.contains("SHOOT SSD 1"))
+        #expect(w.model.notified.last?.isEmpty == false)
+    }
+
+    // The review's N15.
+    @Test func `A settled card can always be read again`() async {
+        let w = Bench()
+        let c = await w.safe()
+        #expect(w.model.cardsToCheckAgain.contains { $0 === c })
     }
 
     @Test func `An unchanged card reads nothing again when someone looks`() async {

@@ -159,6 +159,13 @@ private struct DrivesPage: View {
                         .buttonStyle(ActionStyle(kind: .quiet, small: true))
                 }
             }
+            ForEach(model.ignored) { v in
+                PlainRow(title: v.name, subtitle: "Not a working drive: \(model.whyIgnored(v))") {
+                    if !v.isReadOnly {
+                        Button("It's a Drive") { model.setRole("drive", for: v) }.buttonStyle(ActionStyle(kind: .quiet, small: true))
+                    }
+                }
+            }
             // Here whenever there's an answer to take back, even with nothing plugged in: it's how a wrong "It's a Card" gets undone.
             if model.hasVolumeChoices {
                 Button("Forget Card and Drive Choices") { model.forgetVolumeChoices() }
@@ -218,7 +225,7 @@ private struct VersionRow: View {
     let updates: UpdateChecker
 
     var body: some View {
-        PlainRow(title: "Version \(AppInfo.version)", subtitle: updates.line) {
+        PlainRow(title: "Version \(AppInfo.fullVersion)", subtitle: updates.line) {
             if case .available = updates.state {
                 Button("See Release") { UpdateChecker.openReleasePage() }.buttonStyle(ActionStyle(kind: .quiet, small: true))
             } else {

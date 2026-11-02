@@ -38,7 +38,7 @@ import IngestCore
         guard model.isCopying else { return true }
         let a = NSAlert()
         a.messageText = "A card is still copying"
-        a.informativeText = "If you quit, it stops. Everything already checked stays safe, and you can finish later."
+        a.informativeText = "If you quit, it stops. What's copied stays on the drive, and it's read again before it can say Safe."
         a.addButton(withTitle: "Keep Copying")
         a.addButton(withTitle: "Quit Anyway")
         NSApp.activate(ignoringOtherApps: true)

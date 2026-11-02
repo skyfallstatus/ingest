@@ -106,6 +106,9 @@ struct CardSheet: Equatable {
     @MainActor static func idle(model: AppModel) -> BottomLine {
         guard let d = model.workingDrive else {
             if let d = model.drives.first { return BottomLine(kind: .idle, title: "Set up \(d.name)", sentence: "Then plug in a card.", action: .setUp) }
+            if let v = model.ignored.first {
+                return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "\(v.name) can't be one yet: \(model.whyIgnored(v)) See Drives.", action: .setUp)
+            }
             return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "Then plug in a card.", action: .setUp)
         }
         if d.setup == nil { return BottomLine(kind: .idle, title: "Set up \(d.name)", sentence: "Then plug in a card.", action: .setUp) }
@@ -177,7 +180,7 @@ struct CardSheet: Equatable {
         init(card c: CardSession, model: AppModel) {
             card = c
             self.model = model
-            driveName = model.workingDrive?.name ?? "your drive"
+            driveName = model.workingDrive.map(model.label) ?? "your drive"
             shortDrive = driveName.count > 10 ? "your drive" : driveName
             switch c.phase {
             case .reading, .checking: working = true
@@ -255,12 +258,14 @@ struct CardSheet: Equatable {
         case .reading:
             return no(c.read != nil ? "Comparing with \(d)." : "Not checked yet.")
         case .checking(let done, let total):
-            return no("Checking \(done) of \(total) already on \(d).")
+            return no("Checking \(done) of \(total) already on \(d).", .notDone, .stop)
         case .queued:
             return no(onlyHere(s.toGo), .notDone, .stop)
         case .copying:
             return no(s.toGo == 0 ? "Making sure \(d) has finished writing." : onlyHere(s.toGo), .notDone, .stop)
         case .stopped:
+            let unread = c.states.values.reduce(0) { if case .likely = $1 { $0 + 1 } else { $0 } }
+            if unread > 0 { return no("Stopped. \(plural(unread)) still to check.", s.failed ? .failed : .notDone) }
             return no("Stopped. \(onlyHere(s.toGo))", s.failed ? .failed : .notDone)
         case .ready, .finished:
             break
@@ -504,7 +509,7 @@ struct MenuBarState: Equatable {
         }
         let sheet = CardSheet.make(worst, model: model)
         let name = worst.name
-        let drive = model.workingDrive?.name
+        let drive = model.workingDrive.map(model.label)
         switch sheet.bottom.kind {
         case .safe:
             if !model.unreadable.isEmpty { return MenuBarState(word: "Can't read", spoken: "\(AppInfo.name) can't read a volume", twoCards: several) }

@@ -307,7 +307,7 @@ import SwiftUI
         }
 
         // First launch, in the widget
-        model.cameraMemory = ["0000001": CameraMemory(folder: "FX3", displayName: "FX3", serialTail: "…4182")]
+        model.cameraMemory = ["0000001": CameraMemory(folder: "FX3", displayName: "FX3", serialTail: "…0001")]
         let empty = DriveState(volume: volume("Field SSD", path: "/tmp/demo-ssdc"), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none"), setup: nil)
         empty.foldersRead = 3
         for dark in [false, true] {
@@ -333,7 +333,7 @@ import SwiftUI
             HistoryEntry(id: "2", date: Date(timeIntervalSince1970: 1_792_400_000), cardName: "A080", camera: "FX3", driveName: "Field SSD", path: "/tmp/Clients/Tidemark Rowing Club/19.10.26 Pool/Footage/FX3/A080", files: 148, bytes: bytes, outcome: "Copied, needs a look"),
             HistoryEntry(id: "3", date: Date(timeIntervalSince1970: 1_787_000_000), cardName: "A076", camera: nil, driveName: "Field SSD", path: "/tmp/Clients/Lantern Bakery Co./02.09.26 Launch/Footage/A076", files: 40, bytes: 20_000_000_000, outcome: "Not finished"),
         ]
-        model.cameraMemory = ["0000001": CameraMemory(folder: "FX3", clockOffsetDays: 3, displayName: "FX3", serialTail: "…4182"),
+        model.cameraMemory = ["0000001": CameraMemory(folder: "FX3", clockOffsetDays: 3, displayName: "FX3", serialTail: "…0001"),
                               "1": CameraMemory(folder: "B Cam", displayName: "A7S III", serialTail: "…0192")]
         for dark in [false, true] {
             func page(_ name: String, _ set: (PanelUI) -> Void) {

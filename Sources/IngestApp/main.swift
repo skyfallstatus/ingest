@@ -51,7 +51,14 @@ import IngestCore
 
     /// Every way of quitting lands here, Cmd+Q included.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        Windows.shared.mayQuit(model: Self.model) ? .terminateNow : .terminateCancel
+        guard Windows.shared.mayQuit(model: Self.model) else { return .terminateCancel }
+        guard Self.model.isCopying else { return .terminateNow }
+        // A stopped job still has to end properly. One that's killed never seals, and stays weak for good.
+        Task { @MainActor in
+            for _ in 0..<600 where Self.model.isCopying { try? await Task.sleep(for: .milliseconds(50)) }
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ n: Notification) {

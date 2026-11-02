@@ -115,7 +115,9 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 
     /// Everything behind the one quiet control, the same from `···` and from a right-click on the mark.
     var entries: [PullDown.Entry] {
-        var out: [PullDown.Entry] = LibraryView.Page.allCases.map { p in .item(p == .settings ? "Settings…" : p.rawValue) { [weak self] in self?.show(p) } }
+        var out: [PullDown.Entry] = model.cardsToCheckAgain.map { c in .item("Check \(c.name) Again") { [weak self] in self?.model.recheck(c) } }
+        if !out.isEmpty { out.append(.separator) }
+        out += LibraryView.Page.allCases.map { p in .item(p == .settings ? "Settings…" : p.rawValue) { [weak self] in self?.show(p) } }
         out.append(.separator)
         if case .available(let version) = model.updates.state {
             out.append(.item("Update to \(version)…") { UpdateChecker.openReleasePage() })

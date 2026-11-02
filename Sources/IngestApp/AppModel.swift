@@ -80,6 +80,8 @@ import UserNotifications
     var weak = false
     var volumeGone = false
     var needsRematch = false
+    var looks = 0                       // the newest last look wins, whatever order they land in
+    var driveWentAway = false           // why `error` says what it says, for when the drive comes back
     var cameraFolder: String?
     var error: String?
     var ejectError: String?
@@ -148,6 +150,9 @@ import UserNotifications
     private var queue: [CardSession] = []
     private var queueRunning = false
     private var sleepToken: NSObjectProtocol?
+    private var keptAwake = 0
+    private(set) var ignored: [Volume] = []     // plugged in, and not offered as anything
+    private(set) var notified: [String] = []    // titles, in order, for the tests
     private var refreshPending = false
     private var announced: Set<String> = []     // what's already had its moment on screen
     private var askedPermission = false
@@ -215,7 +220,7 @@ import UserNotifications
             // The reads can fail before this hears the card has gone, so a copy that has just ended short counts too.
             let cutShort = c.phase == .ready && c.pendingDestination != nil && c.filesToGo > 0
             if c.phase == .copying || cutShort {
-                c.error = "\(c.name) was removed while copying. Nothing already checked is lost: put it back in to finish."
+                c.error = "\(c.name) \(c.phase == .copying ? "was removed while copying" : "came out before every file was copied"). What's copied stays on the drive. Put it back in and it's read again before it can say Safe."
                 c.volumeGone = true
                 c.verdict = nil
                 c.control.stop()
@@ -225,7 +230,7 @@ import UserNotifications
         drives.removeAll { d in
             guard !stillHere(d.volume) else { return false }
             if d === workingDrive {
-                for c in cards where c.isBusy { c.control.stop(); c.error = "\(d.name) was unplugged. Plug it back in to finish." }
+                for c in cards where c.isBusy { c.control.stop(); c.error = "\(d.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
             }
             return true
         }
@@ -235,6 +240,7 @@ import UserNotifications
         }
         maybeCards = found.compactMap { v, r, _ in if case .maybeCard(let why) = r { (v, why) } else { nil } }
         unreadable = found.compactMap { v, r, _ in r == .unreadable ? v : nil }
+        ignored = found.compactMap { v, r, _ in r == .ignored && !(v.isReadOnly && v.isInternal) ? v : nil }
 
         for (v, role, load) in found where role == .drive && !drives.contains(where: { $0.path == v.path }) {
             guard let load else { scheduleRefresh(); continue }     // this mount ended just now: the next look reads the new one
@@ -258,8 +264,9 @@ import UserNotifications
         let waiting = Set(maybeCards.map(\.volume.key) + unreadable.map(\.key))
         if arrived || !waiting.subtracting(announced).isEmpty { onArrival?() }
         announced = waiting
-        // A volume that can't be read says why first. Setup follows once it can be, or it would hide the way out.
-        if unreadable.isEmpty, let first = onFirstLook { onFirstLook = nil; first() }
+        // A volume that can't be read, or that needs an answer, comes first. Setup would only cover it, and say to plug in a
+        // drive that's already there.
+        if unreadable.isEmpty, maybeCards.isEmpty, let first = onFirstLook { onFirstLook = nil; first() }
     }
 
     private func chooseWorkingDrive() {
@@ -287,8 +294,15 @@ import UserNotifications
     private func driveChanged() {
         for c in cards where !c.isBusy {
             c.forgetDrive()
+            c.control.reset()       // whatever stopped it stopped a job on the old drive
+            if c.driveWentAway { c.driveWentAway = false; c.error = nil }
             if c.read != nil, !c.volumeGone { Task { await self.matchCard(c) } }
         }
+    }
+
+    /// Why a volume that's plugged in isn't offered as a drive, for the person looking for it.
+    func whyIgnored(_ v: Volume) -> String {
+        v.isReadOnly ? "macOS has it read-only." : v.isInternal ? "macOS reports it as internal." : "it looks like a backup."
     }
 
     /// A name to tell this drive by. Two drives can carry one label, and macOS mounts the second under a numbered path.
@@ -422,6 +436,8 @@ import UserNotifications
             CardMatcher.match(read: read, ledger: ledger, index: index, driveRoot: root, proved: proved)
         }.value
         guard current() else { return }
+        // A file that failed still failed, and for the same reason, until something new is known about it.
+        for (rel, state) in c.states { if case .failed = state, states[rel] == .missing { states[rel] = state } }
         // Copies this app didn't make still have to prove themselves, by reading both sides.
         let likely = read.listing.files.compactMap { f -> (file: CardFile, drivePath: String, quick: String)? in
             guard case .likely(let p)? = states[f.relPath], let q = read.quick[f.relPath] else { return nil }
@@ -439,6 +455,8 @@ import UserNotifications
             c.checkStarted = Date()
             let ticker = trackBytes(of: c)
             defer { ticker.cancel() }
+            keepAwake()
+            defer { letSleep() }
             let checked = await Task.detached(priority: .userInitiated) {
                 IngestEngine.confirm(cardRoot: cardRoot, driveRoot: root, candidates: likely, ledger: ledger, jobName: name, control: control, cardMount: mount) { d, t in
                     Task { @MainActor in if !c.isBusy { c.phase = .checking(done: d, total: t) } }
@@ -449,9 +467,15 @@ import UserNotifications
             c.proved.merge(checked.proofs) { _, new in new }
             if checked.weak { c.weak = true }
             c.states = states
+            if control.isStopped {
+                c.phase = .stopped
+                return
+            }
         }
         c.existingHome = CardMatcher.existingHome(states: states, files: read.listing.files)
         await finish(c)
+        // A check can run a long while with nobody watching, so the end of one is news, as the end of a copy is.
+        if !likely.isEmpty, c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
     }
 
     /// Bytes move mid-file, so they're read directly rather than waiting for the next file.
@@ -492,21 +516,39 @@ import UserNotifications
             c.phase = c.isEmpty ? .finished : .ready
             return
         }
+        c.looks += 1
+        let look = c.looks
         let states = c.states, proved = c.proved, probed = c.probe.issues, weak = c.weak, ledger = drive.ledger, root = drive.path
         let end = await Task.detached(priority: .userInitiated) {
             let issues = Pipeline.settle(issues: probed, states: states, weak: weak, driveRoot: root, ledger: ledger)
             return Pipeline.conclude(read: read, states: states, proved: proved, issues: issues, driveRoot: root, kind: Self.kind)
         }.value
-        guard !c.isBusy, c.provedOn === drive, workingDrive === drive else { return }
+        guard look == c.looks, !c.isBusy, c.provedOn === drive, workingDrive === drive else { return }
         c.issues = end.issues; c.states = end.states; c.verdict = end.verdict
         c.proved = c.proved.filter { if case .verified? = end.states[$0.key] { true } else { false } }
         c.phase = (c.isSafe || c.isHold || c.isEmpty) ? .finished : .ready
+        // A file that lost its proof is read again. That proof is gone now, so this can only happen once for each.
+        let lost = states.contains { rel, state in
+            if case .verified = state, case .verified? = end.states[rel] { false } else if case .verified = state { true } else { false }
+        }
+        if lost { rematch(c) }
+    }
+
+    /// One more pass, now if nothing's running, or as soon as what's running is done.
+    private func rematch(_ c: CardSession) {
+        if c.isMatching { c.needsRematch = true } else { Task { await self.matchCard(c) } }
     }
 
     /// Goes over a settled card again when someone comes to look at it. It costs a look at each file, never a full read.
+    /// A look can't be dropped because a match is running: that match may already be past its own.
     func lookAgain() {
-        for c in cards where c.phase == .finished && !c.isMatching { Task { await self.finish(c) } }
+        for c in cards where c.phase == .finished {
+            if c.isMatching { c.needsRematch = true } else { Task { await self.finish(c) } }
+        }
     }
+
+    /// Cards someone might want read again from the start. Everything else already offers it, or does it anyway.
+    var cardsToCheckAgain: [CardSession] { cards.filter { $0.phase == .finished && !$0.isEmpty } }
 
     // MARK: Copying
 
@@ -527,8 +569,9 @@ import UserNotifications
             c.forgetDrive()
             c.provedOn = drive
         }
+        for (rel, state) in c.states { if case .failed = state { c.states[rel] = .missing } }     // this job says what becomes of them
         do {
-            try IngestEngine.preflight(job: job(for: c, read: read, drive: drive, destination: destination, extraFolders: extraFolders))
+            try IngestEngine.preflight(job: job(for: c, read: read, drive: drive, destination: destination, extraFolders: extraFolders), ledger: drive.ledger)
             c.pendingDestination = destination
             c.extraFolders = extraFolders
             c.destinationPath = destination.footageRoot
@@ -568,11 +611,23 @@ import UserNotifications
         guard !queueRunning, let c = queue.first else { return }
         queueRunning = true
         queue.removeFirst()
-        if sleepToken == nil {
-            sleepToken = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Copying a camera card")
-        }
         Task { await self.run(c) }
     }
+
+    /// Copying and checking can both run long past the last time anyone touched the Mac.
+    private func keepAwake() {
+        if keptAwake == 0 {
+            sleepToken = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Reading a camera card")
+        }
+        keptAwake += 1
+    }
+
+    private func letSleep() {
+        keptAwake -= 1
+        if keptAwake == 0, let t = sleepToken { ProcessInfo.processInfo.endActivity(t); sleepToken = nil }
+    }
+
+    var isKeepingAwake: Bool { sleepToken != nil }
 
     /// All a job leaves behind, worked out off the main thread.
     private struct Finished: Sendable {
@@ -590,6 +645,8 @@ import UserNotifications
             pumpQueue()
             return
         }
+        keepAwake()
+        defer { letSleep() }
         let job = job(for: c, read: read, drive: drive, destination: destination, extraFolders: c.extraFolders)
         c.progress = nil
         c.liveBytes = 0
@@ -636,7 +693,7 @@ import UserNotifications
             c.verdict = done.verdict
             c.existingHome = CardMatcher.existingHome(states: done.states, files: read.listing.files)
             let driveGone = !drive.isCurrent
-            if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish." }
+            if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
             if out.cancelled || driveGone { c.phase = .stopped }
             else if c.isSafe || c.isHold { c.phase = .finished }
             else { c.phase = .ready }
@@ -646,7 +703,9 @@ import UserNotifications
             refreshIndex(drive)
         }
         queueRunning = false
-        if queue.isEmpty, let t = sleepToken { ProcessInfo.processInfo.endActivity(t); sleepToken = nil }
+        // What happened while the job was unwinding couldn't take effect until now: nothing else will look.
+        if c.volumeGone { scheduleRefresh() }
+        if let w = workingDrive, c.provedOn !== w { driveChanged() }
         pumpQueue()
     }
 
@@ -656,8 +715,8 @@ import UserNotifications
     }
 
     func resume(_ c: CardSession) {
-        guard let d = c.pendingDestination else { return }
         guard workingDrive != nil else { c.error = "Plug in your working drive to carry on."; return }
+        guard let d = c.pendingDestination else { recheck(c); return }     // a check that was stopped, with nothing to copy
         c.error = nil
         start(c, destination: d, extraFolders: c.extraFolders)
     }
@@ -722,13 +781,14 @@ import UserNotifications
 
     private func announce(_ c: CardSession, drive: DriveState) {
         if c.isSafe(on: drive) {
-            notify(title: "\(c.name) is safe to format", body: "\(drive.name) and the card were both read in full, and they match.")
+            notify(title: "\(c.name) is safe to format", body: "\(label(of: drive)) and the card were both read in full, and they match.")
         } else {
             notify(title: "\(c.name) is copied, but needs a look", body: c.issues.first?.message ?? "Check it before formatting.")
         }
     }
 
     private func notify(title: String, body: String) {
+        notified.append(title)
         guard !isDemo, Bundle.main.bundleIdentifier != nil else { return }
         let n = UNMutableNotificationContent()
         n.title = title; n.body = body; n.sound = .default

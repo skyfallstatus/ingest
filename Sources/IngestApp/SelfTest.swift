@@ -565,7 +565,9 @@ import SwiftUI
             try? h.close()
         } else { check("changed in place: the copy opens", false, copy) }
         model.lookAgain()
-        check("changed in place: the green goes", await until(20, "green gone") { !first.isSafe(on: drive) } && first.states[clip.relPath] == .missing, "\(String(describing: first.verdict))")
+        check("changed in place: the green goes", await until(20, "green gone") { !first.isSafe(on: drive) }, "\(String(describing: first.verdict))")
+        _ = await until(120, "read again") { !first.isMatching && first.phase != .finished }
+        check("changed in place: read again, and it says why", { if case .failed? = first.states[clip.relPath] { true } else { false } }(), "\(String(describing: first.states[clip.relPath]))")
 
         unlink(large)
         hdiutil(["detach", first.volume.path])
@@ -581,7 +583,7 @@ import SwiftUI
         check("tamper: the check finishes", await until(180, "checked") { !last.isBusy && !last.isMatching && last.read != nil && (last.phase == .ready || last.phase == .finished) }, "\(last.phase)")
         sheet = CardSheet.make(last, model: model)
         check("tamper: never Safe", !last.isSafe(on: drive) && !MenuBarState.make(model).isSafe, sheet.bottom.title)
-        check("tamper: the changed copy doesn't count, so the clip is owed again", last.filesToGo == 1 && sheet.bottom.sentence == "1 file is only on this card.", "\(marks(last, model)) | \(sheet.bottom.sentence)")
+        check("tamper: the changed copy doesn't count, and it says so", last.filesToGo == 1 && sheet.bottom.sentence == "1 file didn't match.", "\(marks(last, model)) | \(sheet.bottom.sentence)")
 
         // Cameras are remembered, renamed and forgotten
         model.cameraMemory["selftest"] = CameraMemory(folder: "A Cam", displayName: "Test")

@@ -188,7 +188,6 @@ public enum IngestEngine {
                 let jobs = ledger.unfinishedJobs(drivePath: item.drivePath, bytes: both.card.bytes, hash: hash)
                 let thisWeak = (first.refused && !jobs.isEmpty) || !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath, bytes: both.card.bytes, hash: hash)
                 let closes = first.confirmed && !thisWeak && !jobs.isEmpty ? jobs : nil
-                weak = weak || (!jobs.isEmpty && closes == nil)
                 accept(item, hash: both.card.hash, bytes: both.card.bytes, stamp: DriveStamp(both.drive.stamp), weak: thisWeak, closes: closes)
                 ci_add_u64(control.copied, item.file.size)
                 continue

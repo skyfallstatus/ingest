@@ -39,6 +39,17 @@ private final class Image {
 
 private let kind: (String) -> FileKind = { _ in .video }
 private let fm = FileManager.default
+
+/// A switch a fault hook can flip from the engine's thread.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var on: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
 private func publish(_ from: String, _ to: String) -> Int32 { IngestEngine.publish(from, as: to, drivePath: "to", journal: nil) }
 
 @Suite("Real volumes", .serialized)
@@ -172,6 +183,22 @@ struct DiskImageTests {
         let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                      ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
         #expect(!r.weak)
+        if case .verified? = r.states["C0001.MP4"] {} else { Issue.record("\(String(describing: r.states["C0001.MP4"]))") }
+    }
+
+    // Read-only can't confirm a flush, so nothing unfinished can be finished there, however good the read.
+    @Test func `A cut-off copy on a read-only volume stays on hold`() throws {
+        let card = temp(), image = try Image(), drive = image.root
+        put(card + "/C0001.MP4", rnd(100_000))
+        let read = CardReader.read(root: card, kind: kind)
+        let dying = Flag()
+        _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                 hooks: FaultHooks(syncVolume: { _ in dying.on = true; return 0 }, journalFails: { dying.on })) { _ in }
+        image.detach()
+        image.attach(readOnly: true)
+        let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
+                                     ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
+        #expect(r.weak)
         if case .verified? = r.states["C0001.MP4"] {} else { Issue.record("\(String(describing: r.states["C0001.MP4"]))") }
     }
 

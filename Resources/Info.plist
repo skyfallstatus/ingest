@@ -15,6 +15,8 @@
     <key>IngestBuild</key><string>__COMMIT__</string>
     <key>SUFeedURL</key><string>__FEED__</string>
     <key>SUPublicEDKey</key><string>c814kvd36Pw2kN2L1aKPKBNEhQYgEjlS++iikJsXupg=</string>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUScheduledCheckInterval</key><integer>86400</integer>
     <key>SUAutomaticallyUpdate</key><false/>

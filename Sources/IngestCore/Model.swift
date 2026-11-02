@@ -36,7 +36,7 @@ public struct CameraIdentity: Codable, Hashable, Sendable {
         self.family = family; self.make = make; self.model = model; self.displayModel = displayModel
         self.serial = serial; self.bodyKey = bodyKey; self.modelIsCertain = modelIsCertain
     }
-    /// "…4182", the form the UI shows. nil when there is no serial.
+    /// "…0001", the form the UI shows. nil when there is no serial.
     public var serialTail: String? {
         guard let serial, !serial.isEmpty else { return nil }
         return "…" + serial.suffix(4)

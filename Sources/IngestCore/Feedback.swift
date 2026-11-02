@@ -17,7 +17,7 @@ public struct FeedbackReport: Equatable, Sendable {
     private let appVersion: String, macOS: String, mac: String, cameras: [String]
 
     /// `hardwareModel` is the Mac's model identifier: only its family survives. `cameras` is reduced to makers.
-    public init(kind: Kind, message: String = "", appVersion: String = AppInfo.version, system: OperatingSystemVersion,
+    public init(kind: Kind, message: String = "", appVersion: String = AppInfo.fullVersion, system: OperatingSystemVersion,
                 hardwareModel: String, appleSilicon: Bool, cameras: [CameraFamily] = []) {
         self.kind = kind
         self.message = message

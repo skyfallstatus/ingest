@@ -197,7 +197,7 @@ private func proved(card: String, drive: String) throws -> (read: CardRead, out:
     let (read, out) = try proved(card: card, drive: drive)
     try FileManager.default.removeItem(atPath: drive + "/S/A.MP4")
     let r = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }
-    #expect(r.states["A.MP4"] == .missing)
+    #expect(r.states["A.MP4"] == .failed("it's no longer on the drive"))
     #expect(r.verdict != .safe)
 }
 
@@ -208,7 +208,7 @@ private func proved(card: String, drive: String) throws -> (read: CardRead, out:
     let fh = FileHandle(forUpdatingAtPath: drive + "/S/A.MP4")!
     try fh.truncate(atOffset: 1_000_000); try fh.close()
     let r = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }
-    #expect(r.states["A.MP4"] == .missing)
+    #expect(r.states["A.MP4"] == .failed("it changed on the drive after it was proved"))
     #expect(r.verdict != .safe)
 }
 

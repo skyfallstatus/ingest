@@ -85,8 +85,10 @@ void ci_walk(const char *root, ci_walk_cb cb, void *ctx);
 void ci_walk_strict(const char *root, ci_walk_cb cb, void *ctx);
 
 // ---- Finishing a file ----
-// Gives `to` this file, and never replaces a file someone else put there. EEXIST if the name is taken.
-int ci_rename_excl(const char *from, const char *to);
+// Gives `to` this file, if nothing has that name: RENAME_EXCL, atomic where the filesystem has it. ENOTSUP where it hasn't.
+int ci_rename_new(const char *from, const char *to);
+// The same where it hasn't: takes the name with O_EXCL, then renames over that reservation. EEXIST if the name is taken.
+int ci_rename_reserved(const char *from, const char *to);
 // The regular file at `path`, reached with no symbolic link on the way. 0, or an errno.
 int ci_stamp_file(const char *path, ci_stamp *out);
 // The folder at `path`, reached with no symbolic link on the way. 0, or an errno.
@@ -104,7 +106,7 @@ int ci_set_times(const char *path, int64_t seconds, int64_t nanos);
 
 // Lets tests break things at the worst moment. Unused in the app. Any argument can be NULL.
 // A path holding `no_map` can't have its cache cleared. A folder holding `bad_dir` fails part way through a listing.
-// `reserving` runs just before ci_rename_excl reserves a name by hand, with `done` 0, and just after, with `done` 1.
+// `reserving` runs just before ci_rename_reserved takes a name, with `done` 0, and just after, with `done` 1.
 void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserving)(const char *to, int done));
 
 // Swift can't touch C11 atomics directly.

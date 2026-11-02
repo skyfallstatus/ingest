@@ -22,11 +22,17 @@ public struct Proof: Hashable, Sendable {
     func isFor(driveRoot: String) -> Bool { drive.path == driveRoot && drive.isCurrent && card.isCurrent }
 
     /// The card file and the drive file are both the ones that were read, on the mounts they were read on.
-    func holds(for f: CardFile, quick q: String, on root: ResolvedRoot) -> Bool {
-        guard case .verified(let path, _, let bytes) = state, card.isCurrent, drive.isCurrent else { return false }
-        guard f.size == 0 || bytes == f.size else { return false }
-        guard f.size == file.size && f.mtime == file.mtime && f.mtimeNanos == file.mtimeNanos && q == quick else { return false }
-        return root.stamp(path) == stamp
+    func holds(for f: CardFile, quick q: String, on root: ResolvedRoot) -> Bool { whyNot(for: f, quick: q, on: root) == nil }
+
+    /// What stopped this proof holding, in words for a person. Nil while it holds.
+    func whyNot(for f: CardFile, quick q: String, on root: ResolvedRoot) -> String? {
+        guard case .verified(let path, _, let bytes) = state else { return "it wasn't proved" }
+        if !card.isCurrent { return "the card came out after this file was proved" }
+        if !drive.isCurrent { return "the drive was unplugged after this file was proved" }
+        guard f.size == 0 || bytes == f.size else { return "its read stopped short of the size the card lists" }
+        guard f.size == file.size && f.mtime == file.mtime && f.mtimeNanos == file.mtimeNanos && q == quick else { return "it changed on the card after it was proved" }
+        guard let now = root.stamp(path) else { return "it's no longer on the drive" }
+        return now == stamp ? nil : "it changed on the drive after it was proved"
     }
 }
 

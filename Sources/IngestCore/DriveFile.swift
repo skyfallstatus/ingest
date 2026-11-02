@@ -3,9 +3,12 @@ import Foundation
 
 /// A file on the drive as it stood when it was proved: which file on which mounted volume, its size and its modified
 /// time. It's never evidence about bytes. A change to any of it only ever takes a proof away.
+/// exFAT and FAT take a file's ID from its first cluster, and an empty file has none: it gets a made-up ID that changes
+/// whenever macOS recycles the vnode, which a long job does on its own. So an empty file has no identity to keep. It has
+/// no bytes to prove either, and its size and time still show a change.
 public struct DriveStamp: Hashable, Sendable {
     let device: Int64, inode: UInt64, size: UInt64, mtime: Int64, mtimeNanos: Int64
-    init(_ s: ci_stamp) { device = s.dev; inode = s.ino; size = s.size; mtime = s.mtime; mtimeNanos = s.mtime_ns }
+    init(_ s: ci_stamp) { device = s.dev; inode = s.size == 0 ? 0 : s.ino; size = s.size; mtime = s.mtime; mtimeNanos = s.mtime_ns }
 }
 
 /// One mount of one volume. An unmount kills it for good, even if the same volume comes back at the same path, and
@@ -62,4 +65,9 @@ struct ResolvedRoot {
     }
 
     func isPlainFolder(_ rel: String) -> Bool { ci_plain_dir(file(rel)) == 0 }
+
+    var isReadOnly: Bool {
+        var fs = statfs()
+        return statfs(path, &fs) == 0 && fs.f_flags & UInt32(MNT_RDONLY) != 0
+    }
 }

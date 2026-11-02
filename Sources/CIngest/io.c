@@ -404,26 +404,31 @@ void ci_walk_strict(const char *root, ci_walk_cb cb, void *ctx) {
 }
 
 // RENAME_EXCL takes a name atomically where it works. FSKit exFAT answers it with EEXIST when the target exists but
-// ENOTSUP when it doesn't, and has no hard links and no RENAME_SWAP. So there the name is reserved first: O_EXCL makes
-// an empty file, atomically on every filesystem, and whatever was already there, or gets there first, keeps the name.
-// The rename then replaces only that reservation. The one thing left is a writer that doesn't use O_EXCL opening the
-// reservation between the size check and the rename: it writes over any name it's given, without looking.
-int ci_rename_excl(const char *from, const char *to) {
+// ENOTSUP when it doesn't, and has no hard links and no RENAME_SWAP.
+int ci_rename_new(const char *from, const char *to) {
     if (renamex_np(from, to, RENAME_EXCL) == 0) return 0;
-    int e = errno;
-    if (e != ENOTSUP && e != EINVAL) return e;
+    return errno == EINVAL ? ENOTSUP : errno;
+}
+
+// So there the name is reserved first: O_EXCL makes an empty file, atomically on every filesystem, and whatever was already
+// there, or gets there first, keeps the name. The rename then replaces only that reservation, once it's been checked as
+// still being the empty file this made. The descriptor stays open for that check: while it's open, even an empty file on
+// exFAT keeps its ID. What's left is a program that writes to, or renames onto, this name in the instant between the check
+// and the rename, without looking first.
+int ci_rename_reserved(const char *from, const char *to) {
     if (fault_reserving) fault_reserving(to, 0);
     int fd = open(to, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW_ANY, 0644);
     if (fd < 0) return errno;
     if (fault_reserving) fault_reserving(to, 1);
-    struct stat st;
-    int rc = fstat(fd, &st) != 0 ? errno : st.st_size != 0 ? EEXIST : 0;
+    struct stat mine, now;
+    if (fstat(fd, &mine) != 0 || lstat(to, &now) != 0) { int e = errno; close(fd); return e == ENOENT ? EEXIST : e; }
+    int ours = mine.st_size == 0 && now.st_size == 0 && now.st_dev == mine.st_dev && now.st_ino == mine.st_ino;
     close(fd);
-    if (rc == EEXIST) return rc;                // no longer empty, so no longer ours
-    if (rc == 0 && rename(from, to) == 0) return 0;
-    if (rc == 0) rc = errno;
+    if (!ours) return EEXIST;                   // no longer ours, and not ours to remove
+    if (rename(from, to) == 0) return 0;
+    int e = errno;
     unlink(to);
-    return rc;
+    return e;
 }
 
 int ci_stamp_file(const char *path, ci_stamp *out) {

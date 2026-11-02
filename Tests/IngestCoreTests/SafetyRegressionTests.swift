@@ -7,6 +7,14 @@ import Testing
 
 private let fm = FileManager.default
 
+/// A count a fault hook can keep from the engine's thread.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; count += 1; return count }
+}
+
 /// A switch a fault hook can flip from the engine's thread.
 private final class Flag: @unchecked Sendable {
     private let lock = NSLock()
@@ -79,7 +87,7 @@ private func reinsertVerdict(_ card: String, _ drive: String) -> CardVerdict {
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive,
                                  candidates: [(read.listing.files[0], p, read.quick["C0001.MP4"]!)],
                                  ledger: ledger, jobName: "x", control: IngestControl()) { _, _ in }
-    #expect(r.states["C0001.MP4"] == .missing)
+    #expect(r.states["C0001.MP4"] == .failed("the copy on the drive doesn't match the card"))
 }
 
 @Test func driveFileReplacedFailsTheRealCheck() throws {
@@ -95,7 +103,7 @@ private func reinsertVerdict(_ card: String, _ drive: String) -> CardVerdict {
     }
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], p, read.quick["C0001.MP4"]!)],
                                  ledger: ledger, jobName: "x", control: IngestControl()) { _, _ in }
-    #expect(r.states["C0001.MP4"] == .missing)
+    #expect(r.states["C0001.MP4"] == .failed("the copy on the drive doesn't match the card"))
 }
 
 /// A later visit, in a new session: the record gives a hint, and only a full read of both sides proves it.
@@ -192,6 +200,9 @@ private func hashOfVerified(_ s: FileState?) -> String? {
 }
 
 @Test func forgedLedgerPathIsIgnored() {
+    #expect(!Ledger.isInsideDrive("../\u{301}x"), "a slash and the accent after it are one character to Swift, and two to the filesystem")
+    #expect(!Ledger.isInsideDrive(".ingest/\u{301}x"))
+    #expect(!Ledger.isInsideDrive(".INGEST/tmp/x.part"), "a drive that ignores case reaches the same folder")
     #expect(!Ledger.isInsideDrive("../card/C0001.MP4"))
     #expect(!Ledger.isInsideDrive("F/../../card/C0001.MP4"))
     #expect(!Ledger.isInsideDrive("/Volumes/Card/C0001.MP4"))
@@ -381,7 +392,7 @@ private func editMiddle(_ path: String) {
     #expect(s[f.relPath] == .missing, "a record that leads through a link isn't even a hint")
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(f, "S/clip.bin", read.quick[f.relPath]!)],
                                  ledger: ledger, jobName: "x", control: IngestControl(), record: false) { _, _ in }
-    #expect(r.states[f.relPath] == .missing)
+    if case .failed? = r.states[f.relPath] {} else { Issue.record("a link can't prove anything") }
     #expect(r.proofs.isEmpty)
     let job = makeJob(read, drive: drive, dest: "S")
     let out = try? IngestEngine.run(job: job, ledger: ledger, control: IngestControl()) { _ in }
@@ -397,7 +408,7 @@ private func editMiddle(_ path: String) {
     let read = CardReader.read(root: card, kind: kind)
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                  ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: false) { _, _ in }
-    #expect(r.states["C0001.MP4"] == .missing, "the same bytes and the same volume, and still no read through a link")
+    if case .failed? = r.states["C0001.MP4"] {} else { Issue.record("the same bytes and the same volume, and still no read through a link") }
 }
 
 @Test func aDestinationFileLinkedToTheCardIsNotACopy() throws {
@@ -418,7 +429,7 @@ private func editMiddle(_ path: String) {
     let read = CardReader.read(root: card, kind: kind)
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                  ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: false) { _, _ in }
-    #expect(r.states["C0001.MP4"] == .missing)
+    #expect(r.states["C0001.MP4"] == .failed("what's on the drive isn't a separate copy of it"))
 }
 
 @Test func theAppsOwnFolderCantBeALinkToTheCard() throws {
@@ -601,6 +612,9 @@ private func editMiddle(_ path: String) {
     _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
     _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "Again"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
     #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "Again/C0001.MP4"))
+    // And that's the copy a later visit finds, so a card on hold has a way back to green.
+    #expect(CardMatcher.match(read: read, ledger: Ledger(driveRoot: drive), index: nil, driveRoot: drive)["C0001.MP4"] == .likely(drivePath: "Again/C0001.MP4"))
+    #expect(try laterVisit(card, drive).weak == false)
 }
 
 // The review's A-09: reads were compared with each other and never with the listing, so two equal short reads passed.
@@ -615,7 +629,7 @@ private func editMiddle(_ path: String) {
     }
     let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
                                  ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: false) { _, _ in }
-    #expect(r.states["C0001.MP4"] == .missing)
+    if case .failed? = r.states["C0001.MP4"] {} else { Issue.record("two short files aren't a whole file") }
     let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
     if case .verified? = out.states["C0001.MP4"] { Issue.record("a short file passed") }
 }
@@ -811,4 +825,291 @@ private func stripedHalf() throws -> (card: String, drive: String, issue: CardIs
     let read = CardReader.read(root: card, kind: kind)
     #expect(read.unreadable.map(\.path) == ["B.MP4"])
     #expect(read.quick.keys.sorted() == ["A.MP4"])
+}
+
+// MARK: The second round of review
+
+/// A card with one empty file, as real Sony cards have, proved by a real job.
+private func provedCardWithEmptyFile() throws -> (card: String, drive: String, read: CardRead, ledger: Ledger, out: IngestOutcome) {
+    let card = temp(), drive = temp()
+    put(card + "/SONY/SONYCARD.IND", Data())
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    let ledger = Ledger(driveRoot: drive)
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: ledger, control: IngestControl()) { _ in }
+    #expect(verdict(read, out, drive) == .safe)
+    return (card, drive, read, ledger, out)
+}
+
+// Real card, intermittent: "missing=1 verified=137". exFAT makes up the ID of a file with no clusters, and changes it when
+// the vnode is recycled, which a long job does by itself.
+@Test func anEmptyFileHasNoIdentityToLose() throws {
+    var a = ci_stamp(); a.dev = 7; a.ino = 18446744073709551576; a.size = 0; a.mtime = 315529200
+    var b = a; b.ino = 18446744073709551403
+    #expect(DriveStamp(a) == DriveStamp(b))
+    a.size = 5; b.size = 5
+    #expect(DriveStamp(a) != DriveStamp(b), "a file with bytes keeps its identity")
+}
+
+@Test func anEmptyFileThatGetsANewIDKeepsItsProof() throws {
+    let (_, drive, read, _, out) = try provedCardWithEmptyFile()
+    let p = drive + "/S/SONY/SONYCARD.IND"
+    let keep = drive + "/S/keep"        // holds the inode, so the new file can't be given the old one
+    #expect(rename(p, keep) == 0)
+    put(p, Data())
+    setTime(p, to: read.listing.files.first { $0.size == 0 }!)
+    #expect(verdict(read, out, drive) == .safe)
+}
+
+@Test func anEmptyFileThatGainedBytesLosesItsProof() throws {
+    let (_, drive, read, _, out) = try provedCardWithEmptyFile()
+    put(drive + "/S/SONY/SONYCARD.IND", rnd(10))
+    #expect(verdict(read, out, drive) != .safe)
+}
+
+@Test func anEmptyFileWithANewTimeLosesItsProof() throws {
+    let (_, drive, read, _, out) = try provedCardWithEmptyFile()
+    #expect(ci_set_times(drive + "/S/SONY/SONYCARD.IND", 1_000_000_000, 0) == 0)
+    #expect(verdict(read, out, drive) != .safe)
+}
+
+private func expectAReason(_ v: CardVerdict, naming rel: String? = nil, sourceLocation: SourceLocation = #_sourceLocation) {
+    guard case .notSafe(_, _, let why) = v else { Issue.record("expected not safe: \(v)", sourceLocation: sourceLocation); return }
+    #expect(!why.isEmpty && why.allSatisfy { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasSuffix(": ") }, "\(why)", sourceLocation: sourceLocation)
+    if let rel { #expect(why.contains { $0.hasPrefix(rel + ": ") }, "\(why)", sourceLocation: sourceLocation) }
+}
+
+// A run ended NOT SAFE 1/138 with nothing to read. Every way a file can stay unproved has to say so.
+@Test(arguments: [FileState.missing, .likely(drivePath: "a"), .failed("it broke"), .failed(""), .failed("  ")])
+func notSafeNeverComesWithoutAReason(_ state: FileState) {
+    let f = CardFile(relPath: "CLIP/C0001.MP4", size: 10, mtime: 0, kind: .video)
+    let listing = CardListing(root: "/x", files: [f], dirs: [], errors: [])
+    let v = Verdict.evaluate(listing: listing, unreadable: [], states: [f.relPath: state], issues: [], cardUnchanged: true)
+    if case .failed(let why) = state, why.trimmingCharacters(in: .whitespaces).isEmpty {
+        guard case .notSafe(_, _, let reasons) = v else { Issue.record("\(v)"); return }
+        #expect(!reasons.isEmpty)
+        #expect(reasons.allSatisfy { $0.hasPrefix(f.relPath + ": ") && $0.count > f.relPath.count + 3 }, "\(reasons)")
+    } else { expectAReason(v, naming: f.relPath) }
+}
+
+@Test func aFileWithNoStateAtAllStillGetsAReason() {
+    let f = CardFile(relPath: "C0001.MP4", size: 10, mtime: 0, kind: .video)
+    expectAReason(Verdict.evaluate(listing: CardListing(root: "/x", files: [f], dirs: [], errors: []), unreadable: [], states: [:], issues: [], cardUnchanged: true), naming: f.relPath)
+}
+
+@Test func everyWayOfLosingAProofSaysWhich() throws {
+    var (_, drive, read, ledger, out) = try provedCard()
+    func why() -> [String] {
+        let end = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive, kind: kind)
+        expectAReason(end.verdict, naming: "C0001.MP4")
+        if case .notSafe(_, _, let w) = end.verdict { return w }
+        return []
+    }
+    editMiddle(drive + "/S/C0001.MP4")
+    #expect(why().contains("C0001.MP4: it changed on the drive after it was proved"))
+    try fm.removeItem(atPath: drive + "/S/C0001.MP4")
+    #expect(why().contains("C0001.MP4: it's no longer on the drive"))
+    ledger.mount?.retire()
+    #expect(why().contains("C0001.MP4: the drive was unplugged after this file was proved"))
+    (_, drive, read, ledger, out) = try provedCard()
+    read.mount?.retire()
+    #expect(why().contains("C0001.MP4: the card came out after this file was proved"))
+    (_, drive, read, ledger, out) = try provedCard()
+    out.proofs = [:]
+    expectAReason(Pipeline.conclude(read: read, states: out.states, proved: [:], issues: [], driveRoot: drive, kind: kind).verdict, naming: "C0001.MP4")
+}
+
+// The review's A2: a crash between reserving a name and the rename left an empty file there, and that blocked the card for good.
+@Test func aReservationACrashLeftBehindIsCleared() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let dead = Ledger(driveRoot: drive)
+    let journal = try dead.open(LedgerHeader(job: "DEAD", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    journal.note(.reserve, "S/C0001.MP4")
+    journal.close()
+    put(drive + "/S/C0001.MP4", Data())
+
+    let read = CardReader.read(root: card, kind: kind)
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(out.failures.isEmpty, "\(out.states)")
+    #expect(verdict(read, out, drive) == .safe)
+}
+
+@Test func anEmptyFileSomeoneElseMadeKeepsItsNameAndSaysSo() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    put(drive + "/S/C0001.MP4", Data())
+    let read = CardReader.read(root: card, kind: kind)
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(out.states["C0001.MP4"] == .failed("an empty file already has that name on the drive"))
+    #expect(fm.fileExists(atPath: drive + "/S/C0001.MP4"))
+}
+
+@Test func aReservationGivenBackIsNeverSwept() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1000))
+    let first = Ledger(driveRoot: drive)
+    let journal = try first.open(LedgerHeader(job: "GONE", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    journal.note(.reserve, "S/theirs.bin")
+    journal.note(.release, "S/theirs.bin")
+    journal.close()
+    put(drive + "/S/theirs.bin", Data())
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(fm.fileExists(atPath: drive + "/S/theirs.bin"), "someone else got to that name first, so it was never the app's")
+}
+
+@Test func aProvedEmptyFileIsNeverTakenForAReservation() throws {
+    let (card, drive, _, _, _) = try provedCardWithEmptyFile()
+    let dead = Ledger(driveRoot: drive)
+    let journal = try dead.open(LedgerHeader(job: "OLD", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    journal.note(.reserve, "S/SONY/SONYCARD.IND")
+    journal.close()
+    put(card + "/NEW.MP4", rnd(1000))
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "T"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    #expect(fm.fileExists(atPath: drive + "/S/SONY/SONYCARD.IND"))
+}
+
+// The review's A4: the bytes were only asked about for a path with no record, so a strong record elsewhere hid a weak copy.
+@Test func aWeakCopyMovedOntoAStrongNameStaysWeak() throws {
+    let card = temp(), other = temp(), drive = temp()
+    put(card + "/a.bin", rnd(1_000_000))
+    put(other + "/a.bin", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "W"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    let strong = CardReader.read(root: other, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(strong, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    try fm.removeItem(atPath: drive + "/S/a.bin")
+    try fm.moveItem(atPath: drive + "/W/a.bin", toPath: drive + "/S/a.bin")
+    let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/a.bin", read.quick["a.bin"]!)],
+                                 ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
+    #expect(r.weak)
+}
+
+@Test func aStrongCopyAtItsOwnRecordStaysStrong() throws {
+    let card = temp(), drive = temp()
+    put(card + "/a.bin", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "W"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: FaultHooks(syncVolume: { _ in 1 })) { _ in }
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/a.bin", read.quick["a.bin"]!)],
+                                 ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl()) { _, _ in }
+    #expect(!r.weak)
+}
+
+// The reviews' N01 and A13: A-06 again. A drive that stops taking writes can't be told from one that was pulled, so a job
+// is only strong once it's sealed, and nothing has to reach the drive for it to stay weak.
+@Test func aDriveThatStopsTakingWritesBeforeTheEndLeavesTheJobWeak() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1_000_000))
+    let read = CardReader.read(root: card, kind: kind)
+    let dying = Flag()
+    let hooks = FaultHooks(afterCopy: { _, _, _ in }, syncVolume: { _ in dying.on = true; return 1 }, journalFails: { dying.on })
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }
+    #expect(out.weakVerification)
+    #expect(try laterVisit(card, drive).weak)
+}
+
+private func jobCutOff(_ drive: String, sealed: Bool, job: String = "CUT") throws -> LedgerEntry {
+    let ledger = Ledger(driveRoot: drive)
+    let journal = try ledger.open(LedgerHeader(job: job, started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    try journal.begin()
+    let e = LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil)
+    try journal.record(e)
+    if sealed { #expect(journal.seal([e], flushVolume: { 0 })) }
+    journal.close()
+    return e
+}
+
+@Test func aJobCutOffBeforeItsSealIsWeak() throws {
+    let drive = temp()
+    _ = try jobCutOff(drive, sealed: false)
+    #expect(Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+}
+
+@Test func aJobTheDriveConfirmedStaysStrongOnALaterVisit() throws {
+    let drive = temp()
+    _ = try jobCutOff(drive, sealed: true)
+    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+}
+
+@Test func aRecordFromBeforeTheMarksIsNotCalledWeak() throws {
+    let drive = temp()
+    let ledger = Ledger(driveRoot: drive)
+    let journal = try ledger.open(LedgerHeader(job: "OLD", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    try journal.record(LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil))
+    journal.close()
+    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+}
+
+@Test func aJobStillRunningIsNotCalledWeak() throws {
+    let drive = temp()
+    let ledger = Ledger(driveRoot: drive)
+    let journal = try ledger.open(LedgerHeader(job: "LIVE", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    defer { journal.close() }
+    try journal.begin()
+    try journal.record(LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil))
+    #expect(!Ledger(driveRoot: drive).isWeak(drivePath: "S/a"))
+}
+
+// The reviews' N02 and A12: inside `seal`, `sync` was the volume flush, so the job asked three times and heard the last.
+@Test func theFirstRefusalOfTheVolumeFlushCounts() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(1000))
+    let read = CardReader.read(root: card, kind: kind)
+    let calls = Counter()
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(),
+                                   hooks: FaultHooks(syncVolume: { _ in calls.next() == 1 ? 1 : 0 })) { _ in }
+    #expect(out.weakVerification)
+    #expect(calls.value == 1)
+}
+
+// The review's A8: a copy made a moment ago can go green while it's still only in a cache.
+@Test func aCheckAsksTheDriveToFlushFirst() throws {
+    let card = temp(), drive = temp()
+    let d = rnd(1000)
+    put(card + "/C0001.MP4", d); put(drive + "/S/C0001.MP4", d)
+    let read = CardReader.read(root: card, kind: kind)
+    func check(record: Bool, flush: Int32) -> (weak: Bool, calls: Int) {
+        let calls = Counter()
+        let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
+                                     ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: record,
+                                     hooks: FaultHooks(syncVolume: { _ in _ = calls.next(); return flush })) { _, _ in }
+        return (r.weak, calls.value)
+    }
+    #expect(check(record: false, flush: 1) == (false, 0), "a check that promises to change nothing changes nothing")
+    #expect(check(record: true, flush: 0) == (false, 1))
+    #expect(check(record: true, flush: 1) == (true, 1))
+}
+
+// The review's A9: rule 14 says empty folders survive, and only a job made them.
+@Test func aCardsEmptyFolderHasToBeOnTheDrive() throws {
+    let card = temp(), drive = temp()
+    let d = rnd(1000)
+    put(card + "/CONTENTS/CLIP/C0001.MP4", d)
+    try fm.createDirectory(atPath: card + "/CONTENTS/ICON", withIntermediateDirectories: true)
+    put(drive + "/Sorted/CONTENTS/CLIP/C0001.MP4", d)
+    let read = CardReader.read(root: card, kind: kind)
+    let ledger = Ledger(driveRoot: drive)
+    let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "Sorted/CONTENTS/CLIP/C0001.MP4", read.quick["CONTENTS/CLIP/C0001.MP4"]!)],
+                                 ledger: ledger, jobName: "x", control: IngestControl()) { _, _ in }
+    func verdictNow() -> CardVerdict { Pipeline.conclude(read: read, states: r.states, proved: r.proofs, issues: [], driveRoot: drive, kind: kind).verdict }
+    guard case .hold(let issues) = verdictNow() else { Issue.record("\(verdictNow())"); return }
+    #expect(issues.map(\.code) == ["card.empty-folders"])
+    try fm.createDirectory(atPath: drive + "/Sorted/CONTENTS/ICON", withIntermediateDirectories: true)
+    #expect(verdictNow() == .safe)
+}
+
+@Test func aJobMakesTheEmptyFoldersWhereTheFilesGo() throws {
+    let card = temp(), drive = temp()
+    put(card + "/DCIM/a.ARW", rnd(1000))
+    try fm.createDirectory(atPath: card + "/DCIM/EMPTY", withIntermediateDirectories: true)
+    let read = CardReader.read(root: card) { _ in .still }
+    let job = Pipeline.makeJob(read: read, states: [:], cardName: "T", driveRoot: drive, camera: nil,
+                               destination: Destination(footageRoot: "F", stillsRoot: "P"), probe: ProbeResult(hasStills: true), index: nil)
+    let out = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
+    let end = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .still }
+    #expect(end.verdict == .safe, "\(end.verdict)")
+    #expect(fm.fileExists(atPath: drive + "/P/DCIM/EMPTY"))
 }

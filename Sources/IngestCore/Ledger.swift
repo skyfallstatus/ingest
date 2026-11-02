@@ -19,17 +19,33 @@ struct LedgerHeader: Codable, Hashable, Sendable {
     var app: String
 }
 
-/// A step in a job's own record. `finishing` goes down before the drive is asked to confirm the job, and `sealed` once it
-/// has. A job that reached the first and not the second never got that confirmation, however the job ended, and even if
-/// nothing more could be written after it, so every file in it stays weak.
+/// A step in a job's own record. `opened` is on the drive before the job writes anything, and `sealed` goes down only once
+/// the drive has confirmed the job. A job that has the first and not the second was never confirmed, however it ended, and
+/// a drive that stopped taking writes leaves exactly that, so every file in it stays weak.
 private enum LedgerMark: String {
-    case finishing, sealed
+    case opened, sealed
     var line: Data { Data("{\"mark\":\"\(rawValue)\"}\n".utf8) }
     static let prefix = Data("{\"mark\":".utf8)
     init?(line: Data.SubSequence) {
         guard line.starts(with: Self.prefix) else { return nil }
-        guard let found = [Self.finishing, .sealed].first(where: { $0.line.dropLast() == line }) else { return nil }
+        guard let found = [Self.opened, .sealed].first(where: { $0.line.dropLast() == line }) else { return nil }
         self = found
+    }
+}
+
+/// A file's real name, reserved or given back. Where a filesystem has no exclusive rename, a crash can leave the reservation
+/// behind, and this is how a later job knows that empty file was the app's own and not someone else's.
+enum NameNote: String {
+    case reserve, release
+    func line(_ path: String) -> Data? {
+        guard var d = try? JSONEncoder().encode([rawValue: path]) else { return nil }
+        d.append(0x0A)
+        return d
+    }
+    static func read(_ line: Data.SubSequence) -> (note: NameNote, path: String)? {
+        guard line.starts(with: Data("{\"reserve\":".utf8)) || line.starts(with: Data("{\"release\":".utf8)),
+              let pair = (try? JSONDecoder().decode([String: String].self, from: Data(line)))?.first, let note = NameNote(rawValue: pair.key) else { return nil }
+        return (note, pair.value)
     }
 }
 
@@ -45,6 +61,7 @@ public final class Ledger: @unchecked Sendable {
     private let lock = NSLock()
     private var weakPaths: Set<String> = []
     private var weakContent: Set<String> = []       // size and full hash, so a weak copy stays weak under a new name
+    private var reservations: [String: String] = [:]   // path → the job that reserved it and never finished with it
 
     public init(driveRoot: String, mount: MountAnchor? = nil) {
         self.driveRoot = driveRoot
@@ -62,21 +79,33 @@ public final class Ledger: @unchecked Sendable {
         for n in names where n.hasSuffix(".jsonl") && !n.hasPrefix("._") {
             guard let data = FileManager.default.contents(atPath: folder + "/" + n) else { continue }
             var entries: [LedgerEntry] = []
-            var finishing = false, sealed = false
+            var opened = false, sealed = false
+            var reserved: Set<String> = []
             for line in data.split(separator: 0x0A).dropFirst() {  // the first line is the job header
-                switch LedgerMark(line: line) {
-                case .finishing: finishing = true
-                case .sealed: sealed = true
-                case nil:
-                    if let e = try? dec.decode(LedgerEntry.self, from: Data(line)) { entries.append(e) }  // a torn last line is simply skipped
+                if let mark = LedgerMark(line: line) {
+                    if mark == .opened { opened = true } else { sealed = true }
+                } else if let (note, path) = NameNote.read(line) {
+                    if note == .reserve { reserved.insert(path) } else { reserved.remove(path) }
+                } else if let e = try? dec.decode(LedgerEntry.self, from: Data(line)) {     // a torn last line is simply skipped
+                    entries.append(e)
+                    reserved.remove(e.drivePath)
                 }
             }
-            let unconfirmed = finishing && !sealed
+            let job = String(n.dropLast(".jsonl".count))
+            // A journal with no `opened` is a check, or a job from before these marks: neither claims a flush was confirmed.
+            let unconfirmed = opened && !sealed && !isLive(job: job)
             for var e in entries {
                 if unconfirmed { e.weak = true }
                 add(e)
             }
+            for path in reserved { reservations[path] = job }
         }
+    }
+
+    /// Empty files at these paths are the app's own, left by a job that died holding the name.
+    func abandonedReservations() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return reservations.compactMap { path, job in byPath[path]?.size == 0 || isLive(job: job) ? nil : path }
     }
 
     private func add(_ e: LedgerEntry) {
@@ -96,7 +125,10 @@ public final class Ledger: @unchecked Sendable {
     func entry(size: UInt64, quick: String) -> LedgerEntry? {
         guard size > 0 else { return nil }
         lock.lock(); let list = byKey[Self.key(size: size, quick: quick)] ?? []; lock.unlock()
-        return list.first { root?.stamp($0.drivePath)?.size == $0.size }
+        let present = list.filter { root?.stamp($0.drivePath)?.size == $0.size }
+        // A good copy beside a weak one is the one to look at, or the weak one would hold the card back for good.
+        lock.lock(); defer { lock.unlock() }
+        return present.first { !weakPaths.contains($0.drivePath) } ?? present.first
     }
 
     /// What this drive's record says about a path, for a file that came from another card.
@@ -107,20 +139,23 @@ public final class Ledger: @unchecked Sendable {
 
     /// A ledger, a saved setup and a job are all input from outside, so their paths must stay on the drive, and out of the
     /// folder that holds the app's own files.
+    /// Split as the filesystem splits, by bytes: to Swift, a slash and the accent after it are one character.
     static func isInsideDrive(_ path: String) -> Bool {
-        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        return !path.hasPrefix("/") && parts.first != Substring(AppInfo.driveFolder) && !parts.contains("..") && !parts.contains(".")
+        let parts = path.utf8.split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        return !path.utf8.starts(with: "/".utf8) && parts.first.map(matchKey) != matchKey(AppInfo.driveFolder) && !parts.contains("..") && !parts.contains(".")
     }
 
     fileprivate func remember(_ e: LedgerEntry) {
         lock.lock(); add(e); lock.unlock()
     }
 
-    /// This copy was checked less strongly than usual, and that has to stay visible on every later visit. A file with no
-    /// record of its own at this path may be that same copy moved or renamed, so its bytes are asked about too.
+    /// This copy was checked less strongly than usual, and that has to stay visible on every later visit. Unless the record
+    /// at this path is for these very bytes, this may be that same copy moved or renamed, so the bytes are asked about too.
     func isWeak(drivePath: String, bytes: UInt64 = 0, hash: String = "") -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return weakPaths.contains(drivePath) || (byPath[drivePath] == nil && weakContent.contains(Self.content(bytes: bytes, hash: hash)))
+        if weakPaths.contains(drivePath) { return true }
+        if let own = byPath[drivePath], own.size == bytes, own.hash == hash { return false }
+        return weakContent.contains(Self.content(bytes: bytes, hash: hash))
     }
 
     /// The drive can't be told, so at least this mount remembers.
@@ -181,6 +216,11 @@ final class LedgerJournal: @unchecked Sendable {
         if fault?() == true { throw IngestError.driveNotWritable(ledger.driveRoot) }
         try handle.synchronize()
     }
+    /// All the way to the device, where it'll go. `synchronize` alone stops at the drive's cache.
+    private func flush() throws {
+        if fault?() == true { throw IngestError.driveNotWritable(ledger.driveRoot) }
+        if fcntl(handle.fileDescriptor, F_FULLFSYNC) != 0 { try handle.synchronize() }
+    }
     fileprivate func write<T: Encodable>(_ v: T) throws {
         var d = try enc.encode(v)
         d.append(0x0A)
@@ -196,26 +236,32 @@ final class LedgerJournal: @unchecked Sendable {
         try write(e)
         lock.lock(); defer { lock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
-        if e.weak == true || now - lastSync >= Self.syncEvery {
-            try sync()
-            lastSync = now
-        }
+        if e.weak == true { try flush(); lastSync = now }
+        else if now - lastSync >= Self.syncEvery { try sync(); lastSync = now }
         if e.weak != true { ledger.remember(e) }
     }
-    /// Asks the drive to confirm the job, with `sync`. True only if it did and that's on the record. Anything else leaves
-    /// the job weak on every later visit: `finishing` is already on the drive by then, and `sealed` never gets there.
-    func seal(_ entries: [LedgerEntry], sync: () -> Int32) -> Bool {
-        func mark(_ m: LedgerMark) -> Bool {
+    /// Goes down before the job writes anything, and has to reach the drive, or the job doesn't start.
+    func begin() throws {
+        lock.lock(); defer { lock.unlock() }
+        try put(LedgerMark.opened.line)
+        try flush()
+    }
+    /// Says which real name is about to be taken, or was given back. Only a crash at that very moment ever needs it, so
+    /// it isn't worth a flush: if it's lost too, the file stays where it is and the job says what's in the way.
+    func note(_ note: NameNote, _ path: String) {
+        lock.lock(); defer { lock.unlock() }
+        if let line = note.line(path) { try? put(line) }
+    }
+    /// Asks the drive to confirm the job with `flushVolume`. True only if it did and that's on the record. Anything else
+    /// leaves `opened` with no `sealed`, which keeps the job weak on every later visit.
+    func seal(_ entries: [LedgerEntry], flushVolume: () -> Int32) -> Bool {
+        let sealed: Bool
+        if flushVolume() == 0 {
             lock.lock(); defer { lock.unlock() }
-            do { try put(m.line); try sync(); return true } catch { return false }
-        }
-        let marked = mark(.finishing)
-        let synced = sync() == 0
-        guard marked, synced, mark(.sealed) else {
-            ledger.rememberWeak(entries)
-            return false
-        }
-        return true
+            do { try put(LedgerMark.sealed.line); try flush(); sealed = true } catch { sealed = false }
+        } else { sealed = false }
+        if !sealed { ledger.rememberWeak(entries) }
+        return sealed
     }
     func close() {
         lock.lock(); defer { lock.unlock() }

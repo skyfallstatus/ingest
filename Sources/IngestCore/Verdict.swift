@@ -25,11 +25,14 @@ public enum Verdict {
         reasons += unreadable.map { "\($0.path): \($0.reason)" }
         var remaining = 0
         for f in listing.files {
+            // Every file that isn't proved says why, so "not safe" can never come with nothing to read.
             switch states[f.relPath] {
-            case .verified: break
-            case .failed(let why): remaining += 1; reasons.append("\(f.relPath): \(why)")
-            default: remaining += 1
+            case .verified: continue
+            case .failed(let why): reasons.append("\(f.relPath): \(why.isEmpty ? "it couldn't be proved" : why)")
+            case .likely: reasons.append("\(f.relPath): it's on the drive, and hasn't been read yet")
+            case .missing, nil: reasons.append("\(f.relPath): it isn't on the drive")
             }
+            remaining += 1
         }
         let blockers = issues.filter { $0.severity == .blocker }
         reasons += blockers.map(\.message)

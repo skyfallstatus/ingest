@@ -73,7 +73,8 @@ public final class IngestControl: @unchecked Sendable {
 
 public enum IngestEngine {
     /// Space check first, so a job never starts that can't finish.
-    public static func preflight(job: IngestJob) throws {
+    /// With `ledger`, what a dead job left in `.ingest/tmp` counts as free: the job will clear it, if it's allowed to start.
+    public static func preflight(job: IngestJob, ledger: Ledger? = nil) throws {
         // A card can't be copied onto itself, by any name.
         let drive = ResolvedRoot(job.driveRoot)?.path ?? job.driveRoot, card = ResolvedRoot(job.cardRoot)?.path ?? job.cardRoot
         if drive == card || drive.hasPrefix(card + "/") { throw IngestError.sameVolume }
@@ -84,7 +85,13 @@ public enum IngestEngine {
         let need = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
         var fs = statfs()
         guard statfs(job.driveRoot, &fs) == 0 else { throw IngestError.driveNotWritable(job.driveRoot) }
-        let free = UInt64(fs.f_bavail) * UInt64(fs.f_bsize)
+        var free = UInt64(fs.f_bavail) * UInt64(fs.f_bsize)
+        if let ledger, let root = ResolvedRoot(job.driveRoot) {
+            for temp in staleTemps(folder: root.file(tempFolder), ledger: ledger) {
+                var st = stat()
+                if lstat(temp, &st) == 0 { free += UInt64(st.st_size) }
+            }
+        }
         let margin: UInt64 = 256 * 1024 * 1024 + UInt64(job.items.count) * 256 * 1024  // ledger, manifests, cluster slack
         if need + margin > free { throw IngestError.notEnoughSpace(needed: need + margin, free: free) }
         let type = withUnsafeBytes(of: fs.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
@@ -95,18 +102,18 @@ public enum IngestEngine {
 
     public static func run(job: IngestJob, ledger: Ledger, control: IngestControl, hooks: FaultHooks = FaultHooks(),
                            progress: @escaping @Sendable (IngestProgress) -> Void) throws -> IngestOutcome {
-        try preflight(job: job)
+        try preflight(job: job, ledger: ledger)
         guard let root = ResolvedRoot(job.driveRoot), let card = ResolvedRoot(job.cardRoot) else { throw IngestError.driveNotWritable(job.driveRoot) }
         let journal = try ledger.open(LedgerHeader(job: job.id, started: Date(), cardName: job.cardName, camera: job.camera,
                                                    destination: job.destination, app: "\(AppInfo.name) \(AppInfo.version)"))
-        journal.fault = hooks.journalFails
         defer { journal.close() }
+        try journal.begin()
+        journal.fault = hooks.journalFails
 
         var made = Set<String>()
+        try makeDir(tempFolder, root: root, made: &made)
+        sweep(root: root, ledger: ledger)
         for d in job.dirsToCreate { try makeDir(d, root: root, made: &made) }
-        let temps = AppInfo.driveFolder + "/tmp"
-        try makeDir(temps, root: root, made: &made)
-        sweepStaleTemps(folder: root.file(temps), ledger: ledger)
 
         let total = job.items.reduce(UInt64(0)) { $0 + $1.file.size }
         var states: [String: FileState] = [:]
@@ -167,7 +174,9 @@ public enum IngestEngine {
                 let both = readBoth(card: src, drive: dst, on: root, expected: item.file.size, control: control)
                 if both.cancelled { break }
                 guard both.identical else {
-                    states[item.file.relPath] = .failed("a different file already has that name on the drive"); continue
+                    states[item.file.relPath] = .failed(both.drive.stamp.size == 0 && both.readsOK && both.card.bytes != 0
+                        ? "an empty file already has that name on the drive" : "a different file already has that name on the drive")
+                    continue
                 }
                 let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: item.drivePath, bytes: both.card.bytes, hash: hexHash(both.card.hash))
                 accept(item, hash: both.card.hash, bytes: both.card.bytes, stamp: DriveStamp(both.drive.stamp), weak: thisWeak)
@@ -175,8 +184,8 @@ public enum IngestEngine {
                 continue
             }
 
-            let temp = root.file(temps) + "/" + job.id + "." + String(i) + ".part"
-            let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, control: control, hooks: hooks,
+            let temp = root.file(tempFolder) + "/" + job.id + "." + String(i) + ".part"
+            let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, journal: journal, control: control, hooks: hooks,
                                       checking: { report(.checking, i, item.file.name) },
                                       markWeak: { hash, bytes in (try? journal.record(entry(item, hash: hash, bytes: bytes, weak: true))) != nil })
             switch result {
@@ -190,14 +199,14 @@ public enum IngestEngine {
         report(.finishing, max(0, job.items.count - 1), "")
         for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
         // Strong status has to be earned here: a job the drive wouldn't confirm stays weak on every later visit.
-        if !journal.seal(recorded, sync: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
+        if !journal.seal(recorded, flushVolume: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
         return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak)
     }
 
     private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped }
 
     /// Up to two attempts. A file only takes its real name once the copy, the drive and a second read of the card agree.
-    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, control: IngestControl,
+    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, journal: LedgerJournal, control: IngestControl,
                                      hooks: FaultHooks, checking: () -> Void, markWeak: (UInt64, UInt64) -> Bool) -> CopyResult {
         var lastError = "copy failed"
         for attempt in 1 ... 2 where !control.isStopped {
@@ -234,7 +243,7 @@ public enum IngestEngine {
             }
             // Times are metadata: failing to set them never fails a verified copy.
             _ = ci_set_times(temp, item.file.mtime, item.file.mtimeNanos)
-            let rc = ci_rename_excl(temp, dst)
+            let rc = publish(temp, as: dst, drivePath: item.drivePath, journal: journal)
             if rc != 0 {
                 discard(temp)
                 return .failed("couldn't put the file in place: \(String(cString: strerror(rc)))")
@@ -246,21 +255,37 @@ public enum IngestEngine {
         return control.isStopped ? .stopped : .failed(lastError)
     }
 
+    /// Gives a proved file its real name, and never takes one from anyone. The record comes first where a crash could leave
+    /// a reservation behind. If the name turns out to be taken, the record is taken back: that file was never the app's.
+    static func publish(_ temp: String, as dst: String, drivePath: String, journal: LedgerJournal?) -> Int32 {
+        let rc = ci_rename_new(temp, dst)
+        guard rc == ENOTSUP else { return rc }
+        journal?.note(.reserve, drivePath)
+        let reserved = ci_rename_reserved(temp, dst)
+        if reserved != 0 { journal?.note(.release, drivePath) }
+        return reserved
+    }
+
     /// Proves "already on the drive" by reading both sides in full. Anything less isn't proof.
     /// With `record` off nothing is written to the drive: a check, for a tool that must leave a drive as it found it.
     public static func confirm(cardRoot: String, driveRoot: String, candidates: [(file: CardFile, drivePath: String, quick: String)],
                                ledger: Ledger, jobName: String, control: IngestControl, record: Bool = true, cardMount: MountAnchor? = nil,
+                               hooks: FaultHooks = FaultHooks(),
                                progress: @escaping @Sendable (Int, Int) -> Void) -> (states: [String: FileState], proofs: [String: Proof], weak: Bool) {
         var out: [String: FileState] = [:]
         var proofs: [String: Proof] = [:]
         var weak = false
         guard !candidates.isEmpty else { return (out, proofs, false) }
         guard let root = ResolvedRoot(driveRoot), let card = ResolvedRoot(cardRoot) else {
-            for c in candidates { out[c.file.relPath] = .missing }
+            for c in candidates { out[c.file.relPath] = .failed("the card or the drive can't be reached") }
             return (out, proofs, false)
         }
         let cardMount = cardMount ?? MountAnchor(path: cardRoot)
         ci_store_u64(control.checked, 0)
+        // A copy made a moment ago may still be on its way, so the drive is asked first. A drive that won't say makes this
+        // weak. One mounted read-only has nothing on its way. With `record` off this is a look, and it changes nothing.
+        let flushed = record ? hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) : 0
+        let unflushed = flushed != 0 && !root.isReadOnly
         let journal = !record ? nil : try? ledger.open(LedgerHeader(job: UUID().uuidString, started: Date(), cardName: jobName, camera: nil,
                                                                     destination: "", app: "\(AppInfo.name) \(AppInfo.version)"))
         defer { journal?.close() }
@@ -269,9 +294,9 @@ public enum IngestEngine {
             progress(i + 1, candidates.count)
             let both = readBoth(card: card.file(c.file.relPath), drive: root.file(c.drivePath), on: root, expected: c.file.size, control: control)
             if both.cancelled { break }
-            guard both.identical else { out[c.file.relPath] = .missing; continue }   // looked the same, wasn't. It gets copied.
+            guard both.identical else { out[c.file.relPath] = .failed(both.whyNot); continue }   // looked the same, wasn't
             let hash = hexHash(both.card.hash)
-            let thisWeak = !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
+            let thisWeak = unflushed || !both.cacheBypassed || ledger.isWeak(drivePath: c.drivePath, bytes: both.card.bytes, hash: hash)
             weak = weak || thisWeak
             let line = LedgerEntry(cardPath: c.file.relPath, drivePath: c.drivePath, size: both.card.bytes, quick: c.quick, hash: hash, weak: thisWeak ? true : nil)
             let kept = (try? journal?.record(line)) != nil
@@ -298,8 +323,14 @@ public enum IngestEngine {
         var readsOK: Bool { card.stage == 0 && drive.stage == 0 }
         /// Two reads of one file are not two copies, and a file on another volume isn't on this drive.
         private var twoFiles: Bool { drive.stamp.dev == driveDevice && (card.stamp.dev != drive.stamp.dev || card.stamp.ino != drive.stamp.ino) }
-        var identical: Bool {
-            readsOK && twoFiles && card.hash == drive.hash && card.bytes == drive.bytes && (expected == 0 || card.bytes == expected)
+        private var whole: Bool { expected == 0 || card.bytes == expected }
+        var identical: Bool { readsOK && twoFiles && card.hash == drive.hash && card.bytes == drive.bytes && whole }
+        /// Why not, for a person. Only asked once `identical` has said no.
+        var whyNot: String {
+            if !readsOK { return IngestEngine.describe(drive.stage != 0 ? drive : card, "checking") }
+            if !twoFiles { return "what's on the drive isn't a separate copy of it" }
+            if !whole { return "it's shorter than the size the card lists" }
+            return "the copy on the drive doesn't match the card"
         }
     }
 
@@ -315,21 +346,27 @@ public enum IngestEngine {
         return BothSides(card: a, drive: b, cacheBypassed: cardCleared != 0 && driveCleared != 0, expected: expected, driveDevice: root.device)
     }
 
-    private static func describe(_ r: ci_result, _ doing: String) -> String {
+    fileprivate static func describe(_ r: ci_result, _ doing: String) -> String {
         let why = r.err != 0 ? String(cString: strerror(r.err)) : "unknown error"
         return "\(doing) failed: \(why)"
     }
 
     static func pathExists(_ p: String) -> Bool { var st = stat(); return lstat(p, &st) == 0 }
 
-    /// A crash or a pulled drive can leave a temp file behind. Temps only ever live in the app's own folder, so nothing
-    /// someone else made can be taken for one, and a job that's still running keeps its own.
-    static func sweepStaleTemps(folder: String, ledger: Ledger) {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return }
-        for name in names where name.hasSuffix(".part") && !name.hasPrefix("._") {
-            let job = String(name.prefix { $0 != "." })
-            if !ledger.isLive(job: job) { discard(folder + "/" + name) }
-        }
+    private static let tempFolder = AppInfo.driveFolder + "/tmp"
+
+    /// Temps a dead job left. They only ever live in the app's own folder, so nothing someone else made can be taken for
+    /// one, and a job that's still running keeps its own.
+    static func staleTemps(folder: String, ledger: Ledger) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
+        return names.filter { $0.hasSuffix(".part") && !$0.hasPrefix("._") && !ledger.isLive(job: String($0.prefix { $0 != "." })) }.map { folder + "/" + $0 }
+    }
+
+    /// Clears what a crash or a pulled drive left: its temps, and any real name it had reserved and never filled, which
+    /// would otherwise stand in the way of that very file for good.
+    static func sweep(root: ResolvedRoot, ledger: Ledger) {
+        for temp in staleTemps(folder: root.file(tempFolder), ledger: ledger) { discard(temp) }
+        for path in ledger.abandonedReservations() where root.stamp(path)?.size == 0 { discard(root.file(path)) }
     }
 
     private static func discard(_ temp: String) { unlink(temp); unlinkAppleDouble(of: temp) }
@@ -347,9 +384,10 @@ public enum IngestEngine {
             built = built.isEmpty ? String(part) : built + "/" + part
             if made.contains(built) { continue }
             let full = root.file(built)
-            if mkdir(full, 0o755) != 0 && errno != EEXIST { throw IngestError.driveNotWritable(root.path) }
+            let new = mkdir(full, 0o755) == 0
+            if !new && errno != EEXIST { throw IngestError.driveNotWritable(root.path) }
             guard root.isPlainFolder(built) else { throw IngestError.driveNotWritable(root.path) }
-            unlinkAppleDouble(of: full)
+            if new { unlinkAppleDouble(of: full) }      // a folder that was already there keeps its tags and comments
             made.insert(built)
         }
     }

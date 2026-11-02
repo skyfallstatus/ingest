@@ -4,9 +4,17 @@ Thank you for trying this. Ingest copies a camera card to your drive, reads both
 
 ## What to do
 
-1. Install it. The steps are in the [README](README.md#installing-a-beta), including the macOS warning you'll get first.
-2. Set up your working drive when it asks. It reads how your folders are organised.
-3. Use it on real cards, alongside whatever you normally do. Please keep doing that.
+1. Install it. The disk image has a file called **Read Me First** with these same steps.
+   1. Drag Ingest to Applications, then open it from there. macOS says it can't be opened. Click **Done**.
+   2. Open **System Settings › Privacy & Security** and scroll down to **Security**.
+   3. Beside the message about Ingest, click **Open Anyway**, enter your login password, then click **Open**.
+   4. On macOS 14 you can skip all that: Control-click the app and choose **Open**.
+2. Look in the menu bar. There's no window and no Dock icon, only a card icon that opens the widget. If the bar is full and hides it, open Ingest from Applications again.
+3. Say yes when macOS asks whether it may read removable volumes. Each new build asks again.
+4. Set up your working drive when it asks. It reads how your folders are organised. exFAT, APFS and HFS+ all work, and FAT32 does up to 4 GB a file.
+5. Use it on real cards, alongside whatever you normally do. Please keep doing that.
+
+It leaves two things on your drive: `.ingest`, a hidden folder with your setup and a record of what was copied, and `ascmhl` beside each card's footage, the checksum manifest. Your cards are never written to.
 
 ## Please don't rely on it yet
 
@@ -14,7 +22,7 @@ Thank you for trying this. Ingest copies a camera card to your drive, reads both
 
 Clips aren't played. It proves the bytes match, and a clip that was already broken in camera will match perfectly. Open a few clips, as you normally would.
 
-If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault.
+If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault. If the drive is pulled during a copy, the files that copy finished say **Have a look** from then on, even after a full read, because nothing can show the drive finished writing them. Use Stop instead of pulling the cable, or copy the card to a new folder.
 
 Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 

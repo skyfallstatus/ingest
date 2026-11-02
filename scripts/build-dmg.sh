@@ -22,6 +22,7 @@ trap detach EXIT
 mkdir -p "$W/stage/.background" "$W/mnt"
 ditto "$APP" "$W/stage/$NAME.app"
 ln -s /Applications "$W/stage/Applications"
+cp "Resources/dmg/Read Me First.txt" "$W/stage/"
 cp Resources/dmg/background.tiff "$W/stage/.background/background.tiff"
 SIZE=$(( $(du -sm "$W/stage" | cut -f1) + 24 ))
 hdiutil create -quiet -srcfolder "$W/stage" -volname "$NAME" -fs HFS+ -format UDRW -size ${SIZE}m "$W/rw.dmg"

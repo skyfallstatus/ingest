@@ -89,7 +89,7 @@ def main():
     def place(x, y):
         return blob(struct.pack(">IIII", x, y, 0xFFFFFFFF, 0xFFFF0000))
     records = [(".", b"bwsp", blob(window)), (".", b"icvp", blob(view)), (".", b"vSrn", b"long" + struct.pack(">I", 1)),
-               (app, b"Iloc", place(170, 165)), ("Applications", b"Iloc", place(430, 165))]
+               (app, b"Iloc", place(170, 150)), ("Applications", b"Iloc", place(430, 150)), ("Read Me First.txt", b"Iloc", place(300, 300))]
     with open(os.path.join(mount, ".DS_Store"), "wb") as f:
         f.write(store(records))
     now = time.time()

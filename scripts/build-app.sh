@@ -17,7 +17,10 @@ ARM=$(bin arm64)
 INTEL=$(bin x86_64)
 rm -rf "$OUT"; mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 lipo -create "$ARM/IngestApp" "$INTEL/IngestApp" -output "$OUT/Contents/MacOS/$NAME"
-sed -e "s/__NAME__/$NAME/g" -e "s/__ID__/$ID/g" -e "s/__VERSION__/$VERSION/g" Resources/Info.plist > "$OUT/Contents/Info.plist"
+# Every build says which one it is, so a report can too. A tree with changes in it says so.
+BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+COMMIT=$(git describe --always --dirty 2>/dev/null || echo unknown)
+sed -e "s/__NAME__/$NAME/g" -e "s/__ID__/$ID/g" -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD/g" -e "s/__COMMIT__/$COMMIT/g" Resources/Info.plist > "$OUT/Contents/Info.plist"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$OUT/Contents/Resources/"
 if [ -n "$SIGN_ID" ]; then
   codesign -f --options runtime --timestamp -s "$SIGN_ID" "$OUT"

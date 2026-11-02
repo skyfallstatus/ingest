@@ -16,13 +16,17 @@ Thank you for trying this. Ingest copies a camera card to your drive, reads both
 
 It leaves two things on your drive: `.ingest`, a hidden folder with your setup and a record of what was copied, and `ascmhl` beside each card's footage, the checksum manifest. Your cards are never written to.
 
+## Which Mac
+
+Ingest has only been tested on macOS 27. macOS 14 and 15 are untested, including the install steps above, though it says macOS 14 or later. If you're on either, please say so when you report anything: the report carries your version, and your Mac is especially useful.
+
 ## Please don't rely on it yet
 
 **Don't format a card on this beta's word alone without keeping another copy, until you're told otherwise.** Copy your cards the way you always have, or keep a second copy somewhere. If Ingest says Safe and you format anyway with no other copy, that's more trust than it has earned so far.
 
 Clips aren't played. It proves the bytes match, and a clip that was already broken in camera will match perfectly. Open a few clips, as you normally would.
 
-If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault. If the drive is pulled during a copy, the files that copy finished say **Have a look** from then on, even after a full read, because nothing can show the drive finished writing them. Use Stop instead of pulling the cable, or copy the card to a new folder.
+If a card or the drive comes out, the proof ends. Put the card back in and it reads everything again before it can say Safe, which takes about as long as reading the card once. That's on purpose, not a fault. If the drive is pulled during a copy, the files that copy finished say **Have a look** from then on, even after a full read, because nothing can show the drive finished writing them. A crash does the same. Use Stop instead of pulling the cable. There's no way to clear it on that drive for now: to see Safe, copy the card to another drive, or to this one after deleting that copy first.
 
 Some cameras have never been tested on a real card. The [table in the README](README.md#cameras-by-evidence) says which. Modern RED, Sony X-OCN, Canon cinema cameras and striped BRAW are among them, so if you shoot those, your cards are especially useful and need especially careful watching.
 

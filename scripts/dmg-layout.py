@@ -80,7 +80,7 @@ def main():
     mount, volume, app = sys.argv[1:4]
     window = plistlib.dumps({"ContainerShowSidebar": False, "ShowPathbar": False, "ShowSidebar": False, "ShowStatusBar": False,
                              "ShowTabView": False, "ShowToolbar": False, "SidebarWidth": 0,
-                             "WindowBounds": "{{240, 180}, {600, 378}}"}, fmt=plistlib.FMT_BINARY)
+                             "WindowBounds": "{{240, 180}, {600, 488}}"}, fmt=plistlib.FMT_BINARY)
     view = plistlib.dumps({"arrangeBy": "none", "backgroundColorBlue": 1.0, "backgroundColorGreen": 1.0, "backgroundColorRed": 1.0,
                            "backgroundImageAlias": alias(mount, volume, ".background/background.tiff"), "backgroundType": 2,
                            "gridOffsetX": 0.0, "gridOffsetY": 0.0, "gridSpacing": 100.0, "iconSize": 128.0, "labelOnBottom": True,
@@ -89,7 +89,7 @@ def main():
     def place(x, y):
         return blob(struct.pack(">IIII", x, y, 0xFFFFFFFF, 0xFFFF0000))
     records = [(".", b"bwsp", blob(window)), (".", b"icvp", blob(view)), (".", b"vSrn", b"long" + struct.pack(">I", 1)),
-               (app, b"Iloc", place(170, 150)), ("Applications", b"Iloc", place(430, 150)), ("Read Me First.txt", b"Iloc", place(300, 300))]
+               (app, b"Iloc", place(170, 220)), ("Applications", b"Iloc", place(430, 220)), ("Read Me First.txt", b"Iloc", place(300, 375))]
     with open(os.path.join(mount, ".DS_Store"), "wb") as f:
         f.write(store(records))
     now = time.time()

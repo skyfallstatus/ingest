@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -42,3 +43,35 @@ private func executable(_ path: String, _ text: String) throws {
     let beta = try String(contentsOf: repo.appendingPathComponent("BETA.md"), encoding: .utf8)
     #expect(beta.contains("Open Anyway"), "and so does the note that goes with it")
 }
+
+// The second review's R03: everything here ran on one version of macOS, and testers have to be told.
+@Test func everyNoteToATesterSaysWhichMacOSIsUntested() throws {
+    for rel in ["BETA.md", "README.md", "Resources/dmg/Read Me First.txt"] {
+        let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
+        #expect(text.contains("macOS 14 and 15 are untested"), "\(rel)")
+    }
+}
+
+// The second review's R02: a way out nobody can take is worse than none. The app won't copy a file it has just proved.
+@Test func noNoteOffersAWayOutThatDoesntExist() throws {
+    for rel in ["BETA.md", "docs/SAFETY.md", "README.md", "Resources/dmg/Read Me First.txt"] {
+        let text = try String(contentsOf: repo.appendingPathComponent(rel), encoding: .utf8)
+        #expect(!text.contains("copy the card to a new folder"), "\(rel)")
+        #expect(!text.contains("to a new folder gives it a clean record"), "\(rel)")
+    }
+}
+
+// The second review's R04: the install steps are what gets a tester past macOS, and their name fell off the window.
+@Test func theInstallStepsFitInTheDiskImageWindow() throws {
+    let layout = try String(contentsOf: repo.appendingPathComponent("scripts/dmg-layout.py"), encoding: .utf8)
+    func number(_ pattern: String) throws -> Int {
+        let r = try #require(layout.range(of: pattern, options: .regularExpression))
+        return try #require(Int(layout[r].split { !$0.isNumber }.last ?? ""))
+    }
+    let window = try number(#"WindowBounds": "\{\{240, 180\}, \{600, [0-9]+"#)
+    let y = try number(#"Read Me First.txt", b"Iloc", place\(300, [0-9]+"#)
+    let image = try #require(NSImage(contentsOf: repo.appendingPathComponent("Resources/dmg/background.tiff")))
+    #expect(window - 28 >= y + 64 + 20, "the title bar takes 28, half the icon 64, and its name 20")
+    #expect(Int(image.size.height) >= window - 28, "and the background has to reach the bottom")
+}
+

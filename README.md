@@ -73,7 +73,7 @@ Copying and proving bytes works the same for any card. What changes by camera is
 
 ## Requirements
 
-macOS 14 or later, on Apple silicon or Intel. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
+macOS 14 or later, on Apple silicon or Intel. Only macOS 27 has been tested so far: macOS 14 and 15 are untested. A working drive formatted exFAT, APFS or HFS+. FAT32 works but refuses files of 4 GB or more.
 
 ## Installing a beta
 
@@ -103,7 +103,7 @@ Report a Bug and Suggest a Feature put your report on the clipboard and open a b
 
 ## What it leaves on your drive
 
-- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: files from a job that was cut off, by a pulled cable or a crash, stay on "Have a look" on that drive even after a full read.
+- `.ingest/`, a hidden folder holding your folder setup, a record of what was copied, and any temporary file from a copy that was cut off, which the next job clears. The record is only a hint: it's never accepted as proof. It can only take confidence away: files from a job that was cut off, by a pulled cable or a crash, stay on "Have a look" on that drive even after a full read, unless that copy is deleted and made again.
 - `ascmhl/`, beside each card's footage: the checksum manifest.
 
 Your cards are never written to.

@@ -140,7 +140,7 @@ struct Spinner: View {
     }
 }
 
-/// A pull-down anchored to its own button. AppKit, so it works in a key-less panel and the self-test can press it.
+/// A menu hanging from its own button. AppKit, so it works in a key-less panel and the self-test can press it.
 struct PullDown: NSViewRepresentable {
     enum Entry {
         case item(String, @MainActor () -> Void)
@@ -153,27 +153,53 @@ struct PullDown: NSViewRepresentable {
     var spoken: String
     var entries: [Entry]
 
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let b = NSPopUpButton(frame: .zero, pullsDown: true)
-        b.isBordered = false
-        (b.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+    func makeNSView(context: Context) -> PullDownButton {
+        let b = PullDownButton(frame: .zero)
         b.setContentHuggingPriority(.required, for: .horizontal)
         b.setAccessibilityLabel(spoken)
         return b
     }
 
-    func updateNSView(_ b: NSPopUpButton, context: Context) {
-        let menu = NSMenu()
-        let face = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    func updateNSView(_ b: PullDownButton, context: Context) {
         if let symbol {
-            face.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: size, weight: .bold))
-            b.imagePosition = .imageOnly
         }
-        menu.addItem(face)
-        menu.add(entries)
-        b.menu = menu
+        b.imagePosition = symbol == nil ? .noImage : .imageOnly
+        b.pullDown = Self.menu(entries)
         b.contentTintColor = color
+    }
+
+    static func menu(_ entries: [Entry]) -> NSMenu {
+        let menu = NSMenu()
+        menu.add(entries)
+        return menu
+    }
+}
+
+/// Opens its menu just below itself. A pull-down `NSPopUpButton` needs a blank first item as its face, and macOS draws that
+/// item at the top of the menu, over the button, so the control appears twice.
+final class PullDownButton: NSButton {
+    static let gap: CGFloat = 8      // the menu's rounded edge sits a little above its first row
+    var pullDown: NSMenu?
+    var present: (NSMenu, NSPoint, NSView) -> Void = { menu, at, view in menu.popUp(positioning: nil, at: at, in: view) }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        title = ""
+        isBordered = false
+        focusRingType = .none
+        target = self
+        action = #selector(open)
+        sendAction(on: .leftMouseDown)
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Where the menu's top left goes, in this button's coordinates.
+    var menuOrigin: NSPoint { NSPoint(x: 0, y: isFlipped ? bounds.maxY + Self.gap : bounds.minY - Self.gap) }
+
+    @objc private func open() {
+        if let pullDown { present(pullDown, menuOrigin, self) }
     }
 }
 

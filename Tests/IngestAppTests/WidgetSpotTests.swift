@@ -1,6 +1,7 @@
 // Where the widget hangs, with two displays. The coordinates are a real external display above a real MacBook screen, and
 // the status item's window as macOS reported it on each: it follows the pointer from one to the other, open widget or not.
 import AppKit
+import SwiftUI
 import Testing
 @testable import IngestApp
 
@@ -114,5 +115,40 @@ private func open(on screen: WidgetSpot.Screen, item: CGRect) throws -> WidgetSp
 
     @Test func `No screens at all, no spot`() {
         #expect(WidgetSpot.next(held: nil, isOpen: false, screens: [], opening: nil, item: nil, width: width) == nil)
+    }
+}
+
+@Suite("The menu behind the quiet control") @MainActor struct PullDownTests {
+    private let entries: [PullDown.Entry] = [.item("History") {}, .separator, .item("Quit") {}]
+
+    @Test func `The menu is only what's in it, with no face of its own`() {
+        let items = PullDown.menu(entries).items
+        #expect(items.count == 3)
+        #expect(items.first?.title == "History", "a blank first item is what drew a second control over the first")
+    }
+
+    @Test func `It opens below the button, not over it`() {
+        let b = PullDownButton(frame: NSRect(x: 0, y: 0, width: 22, height: 20))
+        let below = b.isFlipped ? b.menuOrigin.y - b.bounds.maxY : b.bounds.minY - b.menuOrigin.y
+        #expect(below == PullDownButton.gap)
+        #expect(b.menuOrigin.x == 0, "lined up with the button's left edge")
+    }
+
+    @Test func `Pressing it opens that menu, from that button`() {
+        let b = PullDownButton(frame: NSRect(x: 0, y: 0, width: 22, height: 20))
+        let menu = PullDown.menu(entries)
+        b.pullDown = menu
+        var opened: (NSMenu, NSPoint, NSView)?
+        b.present = { opened = ($0, $1, $2) }
+        #expect(b.sendAction(b.action, to: b.target))
+        #expect(opened?.0 === menu)
+        #expect(opened?.1 == b.menuOrigin)
+        #expect(opened?.2 === b)
+    }
+
+    @Test func `A press takes effect on the way down, as a menu does`() {
+        let b = PullDownButton(frame: NSRect(x: 0, y: 0, width: 22, height: 20))
+        #expect(UInt64(b.sendAction(on: .leftMouseDown)) == NSEvent.EventTypeMask.leftMouseDown.rawValue)
+        #expect(b.title.isEmpty && !b.isBordered, "nothing drawn but the symbol")
     }
 }

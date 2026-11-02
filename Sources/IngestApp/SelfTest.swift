@@ -700,7 +700,7 @@ import SwiftUI
 
     private static func firstMenu(in view: NSView?) -> NSMenu? {
         guard let view else { return nil }
-        if let pop = view as? NSPopUpButton, let m = pop.menu, m.items.contains(where: { $0.title == "Edit…" }) { return m }
+        if let pop = view as? PullDownButton, let m = pop.pullDown, m.items.contains(where: { $0.title == "Edit…" }) { return m }
         for v in view.subviews { if let m = firstMenu(in: v) { return m } }
         return nil
     }

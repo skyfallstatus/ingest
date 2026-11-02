@@ -539,6 +539,7 @@ private final class Dying: @unchecked Sendable {
         defer { chmod(w.a + "/.ingest/ledger", 0o755) }
         let c = await w.ready()
         await w.until("the check") { { if case .failed? = c.states["one.bin"] { true } else { false } }() }
+        w.drive(w.driveA).setup = ShootPlanner.presets()[0].setup     // a drive with no setup says that before anything else
         let sheet = CardSheet.make(c, model: w.model)
         #expect(sheet.lines.flatMap(\.actions).allSatisfy { if case .copyAgain = $0 { false } else { true } }, "\(sheet.lines.map(\.actions))")
         #expect(sheet.bottom.sentence == "2 files not proved yet.", "\(sheet.bottom.sentence)")

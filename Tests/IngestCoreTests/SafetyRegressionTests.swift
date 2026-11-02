@@ -1379,6 +1379,18 @@ private func writtenByAnOlderBuild(_ drive: String) throws {
     #expect(later.unfinishedJobs(drivePath: "S/a", bytes: e.size, hash: e.hash).isEmpty)
 }
 
+@Test func aJobAnOlderBuildIsStillRunningIsntARefusalYet() throws {
+    let drive = temp()
+    let journal = try Ledger(driveRoot: drive).open(LedgerHeader(job: "LIVE", started: Date(), cardName: "c", camera: nil, destination: "S", app: "t"))
+    defer { journal.close() }
+    try journal.begin()
+    try journal.record(LedgerEntry(cardPath: "a", drivePath: "S/a", size: 1, quick: "1", hash: "1", weak: nil))
+    try writtenByAnOlderBuild(drive)
+    let other = Ledger(driveRoot: drive)
+    #expect(!other.isWeak(drivePath: "S/a", bytes: 1, hash: "1"), "a mark made now would stay long after it sealed")
+    #expect(other.hasRunningJob)
+}
+
 // A job that ended properly left nothing behind. Its names were never taken, so whatever's at them now is someone else's.
 @Test(arguments: [Int32(0), 1])
 func aJobThatEndedLeavesItsUnusedNamesToAnyone(flush: Int32) throws {

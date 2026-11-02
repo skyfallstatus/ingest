@@ -150,6 +150,9 @@ public enum IngestEngine {
             }
         }
 
+        // Only a name that's free now can end up reserved by this job. Anything already there isn't the app's to claim.
+        journal.intend(job.items.map(\.drivePath).filter { !pathExists(root.file($0)) })
+
         // A file an earlier job left unfinished can turn up here, and a read only finishes it after a confirmed flush.
         let first = ledger.hasUnfinished ? askToFlush(root, hooks) : (confirmed: false, refused: false)
 
@@ -262,12 +265,12 @@ public enum IngestEngine {
         return control.isStopped ? .stopped : .failed(lastError)
     }
 
-    /// Gives a proved file its real name, and never takes one from anyone. The record comes first where a crash could leave
-    /// a reservation behind. If the name turns out to be taken, the record is taken back: that file was never the app's.
+    /// Gives a proved file its real name, and never takes one from anyone. A crash could leave a reservation behind, which
+    /// is why the job said which names it might take before it began. If the name turns out to be taken, that's taken back:
+    /// that file was never the app's.
     static func publish(_ temp: String, as dst: String, drivePath: String, journal: LedgerJournal?) -> Int32 {
         let rc = ci_rename_new(temp, dst)
         guard rc == ENOTSUP else { return rc }
-        journal?.note(.reserve, drivePath)
         let reserved = ci_rename_reserved(temp, dst)
         if reserved != 0 { journal?.note(.release, drivePath) }
         return reserved

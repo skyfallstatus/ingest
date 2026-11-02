@@ -13,6 +13,8 @@ private final class Calls: @unchecked Sendable {
     private var values: [Int] = []
     var count: Int { lock.lock(); defer { lock.unlock() }; return values.count }
     func add(_ v: Int) { lock.lock(); values.append(v); lock.unlock() }
+    func has(_ v: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return values.contains(v) }
+    func countOf(_ v: Int) -> Int { lock.lock(); defer { lock.unlock() }; return values.filter { $0 == v }.count }
 }
 
 /// A count a fault hook can keep from the engine's thread.
@@ -953,6 +955,27 @@ func notSafeNeverComesWithoutAReason(_ state: FileState) {
     let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in }
     #expect(out.failures.isEmpty, "\(out.states)")
     #expect(verdict(read, out, drive) == .safe)
+}
+
+// A forced detach on real exFAT: 1 round in 10 kept an empty reservation and lost the note written just before it, and the
+// card stopped at "an empty file already has that name". So the names go down once, flushed, before any of them is taken.
+@Test func aJobPutsTheNamesItMayTakeOnTheDriveBeforeItTakesAny() throws {
+    let card = temp(), drive = temp()
+    put(card + "/a.bin", rnd(1000)); put(card + "/b.bin", rnd(1000))
+    put(drive + "/S/b.bin", Data())                     // already there, so never the app's to claim
+    let read = CardReader.read(root: card, kind: kind)
+    let seen = Calls()
+    let saved = Flag()
+    let hooks = FaultHooks(afterCopy: { _, _, _ in
+        let folder = drive + "/.ingest/ledger/"
+        let text = (try? fm.contentsOfDirectory(atPath: folder))?.compactMap { try? String(contentsOfFile: folder + $0, encoding: .utf8) }.joined() ?? ""
+        if text.contains("\"reserve\":\"S\\/a.bin\"") { saved.on = true }
+        if text.contains("\"reserve\":\"S\\/b.bin\"") { seen.add(1) }
+    }, journalFails: { seen.add(2); return false })
+    _ = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }
+    #expect(saved.on, "the name was on the record before the file had it")
+    #expect(!seen.has(1), "and a name that was taken already isn't claimed")
+    #expect(seen.countOf(2) >= 2, "a write and its flush, before the first file")
 }
 
 @Test func anEmptyFileSomeoneElseMadeKeepsItsNameAndSaysSo() throws {

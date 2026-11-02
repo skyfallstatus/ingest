@@ -285,11 +285,18 @@ final class LedgerJournal: @unchecked Sendable {
         try put(LedgerMark.opened.line)
         try flush()
     }
-    /// Says which real name is about to be taken, or was given back. Only a crash at that very moment ever needs it, so
-    /// it isn't worth a flush: if it's lost too, the file stays where it is and the job says what's in the way.
+    /// Says which real name was taken, or given back. Written on its own this can be lost with the drive, so a job doesn't
+    /// rely on it for the names it takes: see `intend`.
     func note(_ note: NameNote, _ path: String) {
         lock.lock(); defer { lock.unlock() }
         if let line = note.line(path) { try? put(line) }
+    }
+    /// Every name this job may take, on the drive before it takes any of them. A pulled drive can keep a reservation and lose
+    /// what was written just before it, so one flush now means a later job can always tell an empty file was the app's own.
+    func intend(_ paths: [String]) {
+        lock.lock(); defer { lock.unlock() }
+        for path in paths { if let line = NameNote.reserve.line(path) { try? put(line) } }
+        try? flush()
     }
     /// Asks the drive to confirm the job with `flushVolume`. True only if it did and that's on the record. A drive that says
     /// no gets `refused`, which is weak for good. If even that can't be written, the job reads as cut off, and only a later

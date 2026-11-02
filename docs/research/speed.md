@@ -210,7 +210,7 @@ Control from the same runs: `F_NOCACHE` alone on a buffered write still reads th
 
 - **A re-inserted card is read in full again.** The 12-hour remount window is gone. Copy and proof doesn't change, but the row above for the same card again is a full re-check, about 92 s on the test card.
 - **Taking a name on exFAT costs an extra create.** exFAT has no exclusive rename, so the name is reserved with `O_EXCL` first. 2,500 tiny files: before 23.65, 26.35, 26.37, 26.94 s, after 28.84, 30.08, 29.06, 30.50 s. That's about 1.4 ms per file, on exFAT only, about 0.2 s on the 138-file card, or 0.1% of 187 s. Skipping the `RENAME_EXCL` try after its first refusal gained nothing measurable, so it stays as it was.
-- **A job's start and end cost a flush each,** one for each of its marks, and a check asks the drive to flush once before it reads.
+- **A job's start and end cost a flush each,** one for each of its marks, plus one for the names it may take, and a check asks the drive to flush once before it reads.
 - **Checks on proof and identity** add two `fstat` calls per file read, and one stat per file at each verdict. They don't show up in the trace.
 - **Opening the widget on a finished card** looks at each file on both sides, with no full read.
 

@@ -425,13 +425,14 @@ import SwiftUI
     }
 
     /// A slim piece of menu bar with the real mark in it. The widget hangs as `WidgetSpot` hangs it: level with the item's
-    /// right edge, 6 pt below it, there while a card is in, and with no animation of its own.
+    /// right edge, 6 pt below it, there while a card is in or it's in use, and with no animation of its own.
     private struct Stage: View {
         @Environment(AppModel.self) private var model
-        static let size = CGSize(width: 400, height: 412)
+        @Environment(PanelUI.self) private var ui
+        let size: CGSize
 
         var body: some View {
-            let open = !model.cards.isEmpty
+            let open = !model.cards.isEmpty || ui.isKey
             let bar = RoundedRectangle(cornerRadius: 9, style: .continuous)
             VStack(alignment: .trailing, spacing: 6) {
                 Image(nsImage: MenuBarArt.image(for: MenuBarState.make(model))).renderingMode(.template).foregroundStyle(Color.ink)
@@ -444,7 +445,7 @@ import SwiftUI
                 Hung().opacity(open ? 1 : 0)
             }
             .padding(.top, 12).padding(.trailing, 40)
-            .frame(width: Self.size.width, height: Self.size.height, alignment: .topTrailing)
+            .frame(width: size.width, height: size.height, alignment: .topTrailing)
         }
     }
 
@@ -466,7 +467,7 @@ import SwiftUI
     private static func media(to dir: String) {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
-        try? FileManager.default.createDirectory(atPath: dir + "/frames", withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let model = AppModel()
         model.isDemo = true
         _ = drive(model)
@@ -511,28 +512,80 @@ import SwiftUI
             }
         }
 
-        let host = NSHostingView(rootView: Stage().environment(model).environment(PanelUI()).environment(\.colorScheme, .light))
+        film("demo", height: 412, length: 11, model: model, ui: PanelUI(), to: dir, beat: beat)
+        filmSetup(to: dir)
+        NSApp.terminate(nil)
+    }
+
+    /// An invented drive for setup to read: two clients, most shoots built one way, the oldest few with a folder of their own.
+    private static func inventedDrive() -> DriveIndex {
+        let work = [("Lantern Bakery Co.", ["Launch", "Menu", "Kitchen", "Bakers"]), ("Tidemark Rowing Club", ["Pool", "Regatta", "Crew"])]
+        var dirs = ["Clients"] + work.map { "Clients/" + $0.0 }
+        for n in 0..<38 {
+            let (client, names) = work[n % 2]
+            let shoot = String(format: "Clients/%@/%02d.%02d.%02d %@", client, 1 + n * 3 % 27, 1 + n % 12, 23 + n / 12, names[n % names.count])
+            dirs += [shoot] + ["Photo", "Photo/RAW", "Photo/Exports", n < 5 ? "Video" : "Footage", "Project"].map { shoot + "/" + $0 }
+        }
+        return DriveIndex(entries: dirs.map { DriveEntry(path: $0, isDir: true, size: 0, mtime: 0) })
+    }
+
+    /// The real setup and the real learner on that drive. A scan marked as running only waits, so nothing is ever read from a disk.
+    private static func filmSetup(to dir: String) {
+        let model = AppModel(), ui = PanelUI()
+        model.isDemo = true
+        let d = DriveState(volume: volume("Field SSD", path: "/tmp/demo-ssdc"), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none"), setup: nil)
+        d.isScanning = true
+        model.drives = [d]
+        let index = inventedDrive()
+        film("setup", height: 432, length: 7.6, model: model, ui: ui, to: dir) { t in
+            switch t {
+            case ..<0.6: break
+            case ..<2.4:
+                if ui.setup == nil { ui.isKey = true; ui.setup = SetupRequest(drive: d) }
+                d.foldersRead = Int((t - 0.6) / 1.8 * Double(index.folderCount))
+            case ..<6:
+                guard d.isScanning else { return }
+                d.install(index: index)
+                d.foldersRead = index.folderCount
+                d.isScanning = false
+                let waiting = d.scanWaiters
+                d.scanWaiters = []
+                waiting.forEach { $0() }
+            default:
+                guard ui.setup != nil else { return }      // Use This, without the write to the drive
+                d.setup = LayoutLearner.learn(entries: index.entries)
+                d.install(index: index)
+                model.workingDrive = d
+                ui.setup = nil
+            }
+        }
+    }
+
+    /// Films `beat` as it plays, into `frames-<name>`. `beat` is told the time in the steps the app reads its counters.
+    private static func film(_ name: String, height: CGFloat, length: Double, model: AppModel, ui: PanelUI, to dir: String, beat: (Double) -> Void) {
+        let frames = "\(dir)/frames-\(name)", size = CGSize(width: 400, height: height)
+        try? FileManager.default.createDirectory(atPath: frames, withIntermediateDirectories: true)
+        let host = NSHostingView(rootView: Stage(size: size).environment(model).environment(ui).environment(\.colorScheme, .light))
         host.appearance = NSAppearance(named: .aqua)
         NSApp.appearance = host.appearance
-        let w = NSWindow(contentRect: NSRect(origin: .zero, size: Stage.size), styleMask: [.borderless], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         w.isOpaque = false
         w.backgroundColor = .clear
         w.appearance = host.appearance
         w.contentView = host
 
-        let length = 11.0, rate = 15.0, start = Date()
+        let rate = 15.0, start = Date()
         var shots: [(at: Double, rep: NSBitmapImageRep)] = []
         var now = 0.0
         while now < length {
-            beat((now / 0.15).rounded(.down) * 0.15)        // the app reads its counters this often
+            beat((now / 0.15).rounded(.down) * 0.15)
             RunLoop.main.run(until: start.addingTimeInterval((now * rate + 1).rounded(.down) / rate))
             now = Date().timeIntervalSince(start)
             if let rep = grab(host) { shots.append((now, rep)) }
         }
         for (i, s) in shots.enumerated() {
             let ms = Int(((i + 1 < shots.count ? shots[i + 1].at : length) - s.at) * 1000)
-            try? png(s.rep)?.write(to: URL(fileURLWithPath: dir + String(format: "/frames/%04d-%d.png", i, max(ms, 1))))
+            try? png(s.rep)?.write(to: URL(fileURLWithPath: frames + String(format: "/%04d-%d.png", i, max(ms, 1))))
         }
-        NSApp.terminate(nil)
     }
 }

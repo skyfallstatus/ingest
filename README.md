@@ -107,6 +107,10 @@ On macOS 14 you can skip all that: Control-click the app and choose **Open**.
 
 Ingest then shows in the menu bar. The first time it reads a card or drive, macOS asks whether it may read removable volumes. Say yes. Each new beta build asks again.
 
+<p align="center">
+  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 built the same way, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, and a Use This button. It settles on No card, with Plug in a card and This opens by itself.">
+</p>
+
 If the menu bar is full, macOS can hide the card icon. Open Ingest from Applications again and the widget appears.
 
 **Open at login** is in Settings. It works with beta builds and doesn't need the app to be in Applications, but macOS remembers where the app was when you turned it on, so move it to Applications first. Whether it stays on across a real log out, or a new beta build, isn't tested yet. If it looks off, turn it on again.

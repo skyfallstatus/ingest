@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Regenerates docs/media: the animation at the top of the README and the widget stills.
+# Regenerates docs/media: the README's two animations and the widget stills.
 # Real views with staged sample data, drawn offscreen. It touches no volume and shows nothing on screen.
 # The animation is filmed as it plays, so its bytes differ a little from run to run, and Reduce Motion on this Mac would show in it.
 set -e -o pipefail
@@ -14,5 +14,5 @@ within 120 .build/debug/IngestApp --render "$WORK" --media
 
 mkdir -p docs/media
 cp "$WORK"/widget-*.png docs/media/
-within 120 "$WORK/apng" "$WORK/frames" docs/media/demo.png
+for clip in demo setup; do within 120 "$WORK/apng" "$WORK/frames-$clip" "docs/media/$clip.png"; done
 du -h docs/media/*

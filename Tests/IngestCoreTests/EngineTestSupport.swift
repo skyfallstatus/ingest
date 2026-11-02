@@ -7,10 +7,10 @@ private let faultLock = NSLock()
 
 /// Breaks what only a sick device breaks, for paths holding the given text, for as long as `body` runs. One test at a
 /// time: tests run in parallel, and a fault is the whole process's.
-func withFaults<T>(noMap: String? = nil, badDir: String? = nil, reserved: (@convention(c) (UnsafePointer<CChar>?) -> Void)? = nil, _ body: () throws -> T) rethrows -> T {
+func withFaults<T>(noMap: String? = nil, badDir: String? = nil, reserving: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Void)? = nil, _ body: () throws -> T) rethrows -> T {
     faultLock.lock(); defer { faultLock.unlock() }
     let a = noMap.flatMap { strdup($0) }, b = badDir.flatMap { strdup($0) }
-    ci_set_faults(a, b, reserved)
+    ci_set_faults(a, b, reserving)
     defer { ci_set_faults(nil, nil, nil); free(a); free(b) }
     return try body()
 }

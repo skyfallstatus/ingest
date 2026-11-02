@@ -260,6 +260,15 @@ private final class Plugged: @unchecked Sendable {
         #expect(MenuBarState.make(w.model).spoken.contains("Samsung SSD Projects"))
     }
 
+    // The review's B12: a menu bar out of room hides the item, and that can be the only way back in.
+    @Test func `A long drive name stays out of the menu bar`() async {
+        let w = Bench()
+        w.driveA.name = "Samsung SSD Projects"
+        _ = await w.ready()
+        #expect(MenuBarState.make(w.model).word == "Not on drive")
+        #expect(MenuBarState.make(w.model).spoken.contains("Don't format"))
+    }
+
     // The review's B05.
     @Test func `First-run setup waits while a volume can't be read`() async {
         let w = Bench()

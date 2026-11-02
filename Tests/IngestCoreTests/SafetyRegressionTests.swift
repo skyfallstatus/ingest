@@ -389,6 +389,17 @@ private func editMiddle(_ path: String) {
     #expect(try fm.subpathsOfDirectory(atPath: card) == ["clip.bin"], "the card is as it was")
 }
 
+@Test func aLinkToAnotherCopyOnTheDriveIsNotThatPath() throws {
+    let card = temp(), drive = temp()
+    let d = rnd(1_000_000)
+    put(card + "/C0001.MP4", d); put(drive + "/Real/C0001.MP4", d)
+    try fm.createSymbolicLink(atPath: drive + "/S", withDestinationPath: drive + "/Real")
+    let read = CardReader.read(root: card, kind: kind)
+    let r = IngestEngine.confirm(cardRoot: card, driveRoot: drive, candidates: [(read.listing.files[0], "S/C0001.MP4", read.quick["C0001.MP4"]!)],
+                                 ledger: Ledger(driveRoot: drive), jobName: "x", control: IngestControl(), record: false) { _, _ in }
+    #expect(r.states["C0001.MP4"] == .missing, "the same bytes and the same volume, and still no read through a link")
+}
+
 @Test func aDestinationFileLinkedToTheCardIsNotACopy() throws {
     let card = temp(), drive = temp()
     put(card + "/C0001.MP4", rnd(2_000_000))
@@ -611,9 +622,10 @@ private func editMiddle(_ path: String) {
 
 @Test func aProofThatReadFewerBytesThanListedIsNoProof() throws {
     let (_, drive, read, _, out) = try provedCard()
+    let fewer = FileState.verified(drivePath: "S/C0001.MP4", hash: "0", bytes: 1)
     var short = out.proofs
-    short["C0001.MP4"]?.state = .verified(drivePath: "S/C0001.MP4", hash: "0", bytes: 1)
-    #expect(Pipeline.conclude(read: read, states: out.states, proved: short, issues: [], driveRoot: drive, kind: kind).verdict != .safe)
+    short["C0001.MP4"]?.state = fewer       // the state agrees, the file hasn't changed, and only the count can tell
+    #expect(Pipeline.conclude(read: read, states: ["C0001.MP4": fewer], proved: short, issues: [], driveRoot: drive, kind: kind).verdict != .safe)
 }
 
 // The review's A-10: any `.ingest-*.part` under a destination was deleted, including real card files.

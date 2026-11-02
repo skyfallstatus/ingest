@@ -104,8 +104,8 @@ int ci_set_times(const char *path, int64_t seconds, int64_t nanos);
 
 // Lets tests break things at the worst moment. Unused in the app. Any argument can be NULL.
 // A path holding `no_map` can't have its cache cleared. A folder holding `bad_dir` fails part way through a listing.
-// `reserved` runs just after ci_rename_excl reserves a name by hand.
-void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserved)(const char *to));
+// `reserving` runs just before ci_rename_excl reserves a name by hand, with `done` 0, and just after, with `done` 1.
+void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserving)(const char *to, int done));
 
 // Swift can't touch C11 atomics directly.
 typedef struct { _Atomic int v; } atomic_int_shim;

@@ -112,6 +112,18 @@ struct DiskImageTests {
         #expect(fm.contents(atPath: from) == Data("NEW".utf8))
     }
 
+    @Test func `A writer that gets to the name first keeps it, even with nothing written yet`() throws {
+        let image = try Image(), from = image.root + "/from", to = image.root + "/to"
+        put(from, Data("NEW".utf8))
+        let first: @convention(c) (UnsafePointer<CChar>?, Int32) -> Void = { to, done in
+            guard done == 0 else { return }
+            close(open(to!, O_CREAT | O_EXCL | O_WRONLY, 0o644))       // in, between the refused rename and the reservation
+        }
+        #expect(withFaults(reserving: first) { ci_rename_excl(from, to) } == EEXIST)
+        #expect(fm.contents(atPath: to) == Data())
+        #expect(fm.contents(atPath: from) == Data("NEW".utf8), "and the proved file is still at its temporary name")
+    }
+
     @Test func `An empty name is taken, and only the name`() throws {
         let image = try Image(), from = image.root + "/from", to = image.root + "/sub/to"
         put(from, Data("NEW".utf8))
@@ -124,21 +136,23 @@ struct DiskImageTests {
     @Test func `A writer that arrives at the last moment can't get in with O_EXCL, or be overwritten without it`() throws {
         let image = try Image(), from = image.root + "/from", to = image.root + "/to"
         put(from, Data("NEW".utf8))
-        let careful: @convention(c) (UnsafePointer<CChar>?) -> Void = { to in
+        let careful: @convention(c) (UnsafePointer<CChar>?, Int32) -> Void = { to, done in
+            guard done == 1 else { return }
             let fd = open(to!, O_CREAT | O_EXCL | O_WRONLY, 0o644)     // what a careful writer does
             if fd >= 0 { close(fd); abort() }                          // it must find the name taken
         }
-        #expect(withFaults(reserved: careful) { ci_rename_excl(from, to) } == 0)
+        #expect(withFaults(reserving: careful) { ci_rename_excl(from, to) } == 0)
         #expect(fm.contents(atPath: to) == Data("NEW".utf8))
 
         let from2 = image.root + "/from2", to2 = image.root + "/to2"
         put(from2, Data("NEW".utf8))
-        let careless: @convention(c) (UnsafePointer<CChar>?) -> Void = { to in
+        let careless: @convention(c) (UnsafePointer<CChar>?, Int32) -> Void = { to, done in
+            guard done == 1 else { return }
             let fd = open(to!, O_CREAT | O_TRUNC | O_WRONLY, 0o644)    // what a careless one does
             _ = write(fd, "OTHER", 5)
             close(fd)
         }
-        #expect(withFaults(reserved: careless) { ci_rename_excl(from2, to2) } == EEXIST)
+        #expect(withFaults(reserving: careless) { ci_rename_excl(from2, to2) } == EEXIST)
         #expect(fm.contents(atPath: to2) == Data("OTHER".utf8))
         #expect(fm.contents(atPath: from2) == Data("NEW".utf8), "and the proved file is still at its temporary name")
     }

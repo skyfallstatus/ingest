@@ -21,10 +21,10 @@
 #define BUF_ALIGN 16384
 
 static const char *_Atomic fault_no_map, *_Atomic fault_bad_dir;
-static void (*_Atomic fault_reserved)(const char *);
+static void (*_Atomic fault_reserving)(const char *, int);
 
-void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserved)(const char *)) {
-    fault_no_map = no_map; fault_bad_dir = bad_dir; fault_reserved = reserved;
+void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserving)(const char *, int)) {
+    fault_no_map = no_map; fault_bad_dir = bad_dir; fault_reserving = reserving;
 }
 
 static ci_result fail(int stage, int err) { ci_result r; memset(&r, 0, sizeof r); r.stage = stage; r.err = err; return r; }
@@ -412,9 +412,10 @@ int ci_rename_excl(const char *from, const char *to) {
     if (renamex_np(from, to, RENAME_EXCL) == 0) return 0;
     int e = errno;
     if (e != ENOTSUP && e != EINVAL) return e;
+    if (fault_reserving) fault_reserving(to, 0);
     int fd = open(to, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW_ANY, 0644);
     if (fd < 0) return errno;
-    if (fault_reserved) fault_reserved(to);
+    if (fault_reserving) fault_reserving(to, 1);
     struct stat st;
     int rc = fstat(fd, &st) != 0 ? errno : st.st_size != 0 ? EEXIST : 0;
     close(fd);

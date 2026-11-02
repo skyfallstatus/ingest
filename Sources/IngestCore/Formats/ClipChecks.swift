@@ -6,7 +6,8 @@ public struct ClipCheckCount: Codable, Hashable, Sendable {
     public enum Kind: String, Codable, Sendable, CaseIterable {     // in the order the report lists them
         case index      // QuickTime family: an index, and data as long as it says
         case mxfEnding  // MXF: the ending a finished clip has
-        case redParts   // R3D and RED ProRes: numbered parts, and R3D footers
+        case redParts   // R3D: numbered parts and their footers
+        case redNumbers // RED ProRes: numbered parts only, which can't show a missing last part
         case frameRun   // .ari, .arx, CinemaDNG: frame numbers with no gap
         case chapters   // GoPro: chapter numbers with no gap
         case streams    // Canon: stream numbers with no gap
@@ -28,7 +29,7 @@ public struct ClipCheckCount: Codable, Hashable, Sendable {
         switch kind {
         case .index: "index"
         case .mxfEnding: "ending"
-        case .redParts: "parts"
+        case .redParts, .redNumbers: "parts"
         case .frameRun: "frame number"
         case .chapters: "chapter"
         case .streams: "stream"
@@ -59,6 +60,7 @@ public struct ClipCheckReport: Codable, Hashable, Sendable {
         let mxf = full.filter { $0.kind == .mxfEnding }.map(\.format)
         if !mxf.isEmpty { parts.append("Each \(Self.list(mxf)) has a finished ending.") }
         if full.contains(where: { $0.kind == .redParts }) { parts.append("RED parts are all there.") }
+        if full.contains(where: { $0.kind == .redNumbers }) { parts.append("RED part numbers have no gaps, though the last part can't be confirmed.") }
         if full.contains(where: { $0.kind == .frameRun }) { parts.append("Frame numbers have no gaps.") }
         if full.contains(where: { $0.kind == .chapters }) { parts.append("GoPro chapters have no gaps.") }
         if full.contains(where: { $0.kind == .streams }) { parts.append("Canon streams have no gaps.") }

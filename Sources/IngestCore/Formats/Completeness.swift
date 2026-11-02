@@ -107,8 +107,8 @@ enum Completeness {
         return (start ... highest).first { !present.contains($0) }
     }
 
-    /// RED ProRes spans like R3D. No footers here, so the numbers are all there is. A .mov beside
-    /// R3D parts is a proxy, and a gap in those loses nothing.
+    /// RED ProRes spans like R3D. No footers here, so the numbers are all there is: they show a gap, and can't show
+    /// that the last part is the last. A .mov beside R3D parts is a proxy, and a gap in those loses nothing.
     static func redProResParts(_ ctx: CardContext, _ tally: inout ClipCheckTally) -> [CardIssue] {
         var issues: [CardIssue] = []
         for folder in ctx.byFolder.keys.sorted() where folder.lowercased().hasSuffix(".rdc") {
@@ -118,14 +118,14 @@ enum Completeness {
                 let stem = CardContext.stem(of: f.name)
                 let part = ClipUnits.part(of: stem)
                 clips[part?.stem ?? stem, default: []].append((part?.number ?? 1, f))
-                tally.add(.redParts, f, concluded: true, format: "RED")
+                tally.add(.redNumbers, f, concluded: true, format: "RED")
             }
             for clip in clips.keys.sorted() {
                 guard let list = clips[clip], let missing = firstMissing(list.map(\.number)) else { continue }
                 issues.append(CardIssue(severity: .hold, code: "red.missing-part",
                                         message: "RED clip \(clip) is missing part \(String(format: "%03d", missing)), so it would play short.",
                                         paths: list.map(\.file.relPath).sorted()))
-                for item in list { tally.fail(.redParts, item.file, format: "RED") }
+                for item in list { tally.fail(.redNumbers, item.file, format: "RED") }
             }
         }
         return issues
@@ -223,7 +223,7 @@ enum Completeness {
 
     // MARK: QuickTime files: BRAW striping and missing indexes
 
-    private enum Finding: Sendable { case noIndex(String), cutShort(String), striped(String), possiblyStriped(String), unknown }
+    private enum Finding: Sendable { case noIndex(String), cutShort(String), unconfirmed(String), striped(String), possiblyStriped(String), unknown }
 
     /// The cameras whose manuals offer "Record RAW on 2 cards".
     private static func canStripe(_ cameraType: String) -> Bool {
@@ -242,6 +242,7 @@ enum Completeness {
             case .missing: return [.noIndex(f.relPath)]
             case .cutShort: return [.cutShort(f.relPath)]
             case .otherContainer: return [.unknown]
+            case .unconfirmed: return [.unconfirmed(f.relPath), .unknown]
             case .present: break
             }
             // `present` also stands for "nothing to judge by". Only the bytes of an index count as a check.
@@ -280,6 +281,11 @@ enum Completeness {
                 let name = (path as NSString).lastPathComponent
                 issues.append(CardIssue(severity: .hold, code: "video.cut-short",
                                         message: "\(name) ends before its own index says it should, so it is cut short.",
+                                        paths: [path]))
+            case .unconfirmed(let path):
+                let name = (path as NSString).lastPathComponent
+                issues.append(CardIssue(severity: .hold, code: "video.index-unconfirmed",
+                                        message: "\(name) couldn't be checked for an index, so it might be cut short.",
                                         paths: [path]))
             case .striped(let path): striped.insert(path)
             case .possiblyStriped(let path):

@@ -83,4 +83,17 @@ struct VolumeLookTests {
         }
         #expect(CardProber.look(atRoot: f.root) != .notACard)
     }
+
+    // The review's C14: a folder for each clip was counted as a drive full of strangers.
+    @Test("Nine Sony clip folders are asked about, not offered as a drive") func clipFolders() {
+        #expect(isMaybe(look { f in for n in 1 ... 9 { f.write("A005C00\(n)_160510N2/A005C00\(n)_160510N2.mxf"); f.write("A005C00\(n)_160510N2/A005C00\(n)_160510N2M01.xml") } }))
+    }
+
+    @Test("Nine CinemaDNG take folders are asked about, not offered as a drive") func takeFolders() {
+        #expect(isMaybe(look { f in for n in 1 ... 9 { f.write("A007_07271236_C03\(n)/A007_07271236_C03\(n)_000000.dng") } }))
+    }
+
+    @Test("Nine client folders holding other names stay a drive") func clientFolders() {
+        #expect(look { f in for n in 0 ..< 9 { f.write("Client \(n)/Edit v2.mov") } } == .notACard)
+    }
 }

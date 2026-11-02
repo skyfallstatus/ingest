@@ -190,9 +190,9 @@ struct FormatsIndex {
         #expect(state(atom("ftyp", ascii("isom") + be32(0)) + atom("moov", mvhd(unix: 1)) + atom("mdat", [1, 2, 3])) == .present)
     }
 
-    @Test func `doc-derived: fragmented MP4 with moof and no moov is not called broken`() {
-        #expect(state(atom("styp", ascii("msdh") + be32(0)) + atom("moof", [0, 0, 0, 0]) + atom("mdat", [1])) == .present)
-        #expect(state(atom("ftyp", ascii("iso5") + be32(0)) + atom("sidx", [0, 0]) + atom("mdat", [1])) == .present)
+    @Test func `doc-derived: fragmented MP4 with moof and no moov is not called broken, or whole`() {
+        #expect(state(atom("styp", ascii("msdh") + be32(0)) + atom("moof", [0, 0, 0, 0]) + atom("mdat", [1])) == .unconfirmed)
+        #expect(state(atom("ftyp", ascii("iso5") + be32(0)) + atom("sidx", [0, 0]) + atom("mdat", [1])) == .unconfirmed)
     }
 
     @Test func `doc-derived: no moov and the file just ends: missing`() {

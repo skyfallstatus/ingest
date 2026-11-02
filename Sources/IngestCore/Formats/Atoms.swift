@@ -259,7 +259,8 @@ enum QuickTime {
 
     /// Can this file play as it is? Top-level atoms only, so it stays cheap.
     /// `cutShort` is an index with its data gone: R6 and other moov-first bodies write `moov` before `mdat`.
-    enum IndexState { case present, missing, cutShort, otherContainer }
+    /// `unconfirmed` is a walk that ended without an answer: it's neither a pass nor a fault.
+    enum IndexState { case present, missing, cutShort, otherContainer, unconfirmed }
 
     static func indexState(_ file: ByteFile) -> IndexState {
         let head = file.read(at: 0, count: 16)
@@ -274,9 +275,9 @@ enum QuickTime {
             if walk.stop == .overrun, walk.atoms.last?.type == "mdat" { return .cutShort }
             return .present
         }
-        if let last = walk.atoms.last, fragments.contains(last.type) { return .present }
+        if let last = walk.atoms.last, fragments.contains(last.type) { return .unconfirmed }   // nothing says where it should end
         switch walk.stop {
-        case .limit: return .present                // far too many atoms to be a broken clip
+        case .limit: return .unconfirmed
         case .garbage: return tailHasMoov(file) ? .present : .missing
         default: return .missing
         }

@@ -60,7 +60,10 @@ enum VolumeProbe {
         let unknown = entries.filter { $0.isDir && !cardFolders.contains($0.name.lowercased()) && !isCameraFolderName($0.name) }.map(\.name)
         // A recorder's folders are its own, however many there are, so this comes before counting them.
         if isRecorder(rootPath, entries: entries, filesAtRoot: filesAtRoot, unknown: unknown) { return .cameraCard(.audioRecorder) }
-        if unknown.count > maxUnknownFolders { return .notACard }
+        if unknown.count > maxUnknownFolders {
+            guard isFolderPerClip(rootPath, unknown) else { return .notACard }
+            return .maybeCard("A folder for each clip, with camera files inside")
+        }
         for folder in unknown where list(rootPath + "/" + folder, limit: 512).contains(where: isProject) { return .notACard }
 
         if let family = marker(rootPath, entries: entries, filesAtRoot: filesAtRoot) {
@@ -104,6 +107,16 @@ enum VolumeProbe {
             return hinted ?? (dirs["sony"] != nil ? .sony : .unknown)
         }
         return nil
+    }
+
+    /// Some bodies give every clip a folder of its own, named as the clip is, so a full root can still be a card.
+    /// Every folder looked at has to hold a clip that carries its name.
+    private static func isFolderPerClip(_ rootPath: String, _ folders: [String]) -> Bool {
+        folders.prefix(6).allSatisfy { folder in
+            list(rootPath + "/" + folder, limit: 64).contains { e in
+                !e.isDir && e.name.hasPrefix(folder) && (Extensions.video.contains(ext(e.name)) || Extensions.cameraRaw.contains(ext(e.name)) || ext(e.name) == "dng")
+            }
+        }
     }
 
     /// Camera-made names at the root, which must not count against a card.

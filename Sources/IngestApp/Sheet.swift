@@ -426,6 +426,7 @@ struct CardSheet: Equatable {
         case .index: return "\(c.format)s with an index"
         case .mxfEnding: return "\(c.format)s with an ending"
         case .redParts: return "RED clips with all parts"
+        case .redNumbers: return "RED clips with no gaps"
         case .frameRun: return "Frame runs with no gap"
         case .chapters: return "GoPro chapters with no gap"
         case .streams: return "Canon streams with no gap"

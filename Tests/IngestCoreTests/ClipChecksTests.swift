@@ -124,4 +124,37 @@ private func moov() -> [UInt8] { mvhd(unix: 1_760_000_000) }
         f.write("DCIM/100GOPRO/GX020042.MP4", mp4Bytes(moov: moov()))
         #expect(f.probe().clipChecks.sentence == "Each MP4 has an index. GoPro chapters have no gaps. Not played.")
     }
+
+    // The review's C10: running out of patience was reported as an index that passed.
+    @Test("A walk that gave up is neither a pass nor a fault") func walkLimit() {
+        let f = Fixture("cc-limit")
+        f.write("CLIP/A.MP4", (0..<513).flatMap { _ in atom("free") })
+        let r = f.probe()
+        #expect(hasIssue(r, "video.index-unconfirmed", .hold))
+        #expect(r.clipChecks.checkedNothing, "it can't read as a pass")
+        #expect(!r.clipChecks.sentence.contains("has an index"))
+    }
+
+    @Test("A fragmented clip can't be told from one cut short, so it says so") func fragments() {
+        let f = Fixture("cc-frag")
+        f.write("CLIP/A.MP4", atom("ftyp", ascii("isom")) + atom("moof", [0, 0, 0, 0]))
+        let r = f.probe()
+        #expect(hasIssue(r, "video.index-unconfirmed", .hold))
+        #expect(!r.clipChecks.sentence.contains("has an index"))
+    }
+
+    // The review's C11: numbers can show a gap, and can't show the last part is the last.
+    @Test("RED ProRes never claims every part is there") func redProRes() {
+        let f = Fixture("cc-redmov")
+        f.write("A001_0101XY.RDM/A001_C001_0101XY.RDC/A001_C001_0101XY_001.MOV", mp4Bytes(major: "qt  ", moov: moov()))
+        let r = f.probe().clipChecks
+        #expect(!r.sentence.contains("RED parts are all there"))
+        #expect(r.sentence.contains("RED part numbers have no gaps, though the last part can't be confirmed."))
+    }
+
+    @Test("RED ProRes with a hole is still a hole") func redProResGap() {
+        let f = Fixture("cc-redhole")
+        for n in [1, 3] { f.write("A001_0101XY.RDM/A001_C001_0101XY.RDC/A001_C001_0101XY_00\(n).MOV", mp4Bytes(major: "qt  ", moov: moov())) }
+        #expect(hasIssue(f.probe(), "red.missing-part", .hold))
+    }
 }

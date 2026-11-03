@@ -25,7 +25,7 @@ import SwiftUI
 
     /// A folder on this Mac, as a drive.
     private static func folder() -> DriveState {
-        var v = volume("Footage", path: "/Users/demo/Movies/Footage")
+        var v = volume("Footage", path: NSHomeDirectory() + "/Movies/Footage")
         v.isFolder = true
         v.isInternal = true
         v.free = 180_200_000_000
@@ -347,7 +347,7 @@ import SwiftUI
             func setupPage<V: View>(_ v: V, _ name: String) {
                 save(Widget(dark: dark) { VStack(spacing: 0) { v }.frame(width: Grid.width).background(Color.surface).foregroundStyle(Color.ink) }, name + s, dir, model: model, dark: dark)
             }
-            setupPage(SetupView(drive: d, learned: setup) {}, "first-run-layout")
+            setupPage(SetupView(drive: d, learned: setup, close: {}, changeDrive: {}), "first-run-layout")
             setupPage(SetupView(drive: empty, learned: nil) {}, "first-run-empty-drive")
             setupPage(ReadingDrive(drive: d) {}, "reading-drive")
             let drives = model.drives
@@ -361,6 +361,7 @@ import SwiftUI
             let footage = folder()
             model.drives = [d, archive, footage]
             setupPage(FirstPage(choice: footage), "first-run-folder")
+            setupPage(SetupView(drive: footage, learned: nil, close: {}, changeDrive: {}), "first-run-folder-layout")
             model.drives = drives
             setupPage(SetupEditor(setup: .constant(setup)) {}, "setup-editor")
         }
@@ -373,6 +374,9 @@ import SwiftUI
         ]
         model.cameraMemory = ["0000001": CameraMemory(folder: "FX3", clockOffsetDays: 3, displayName: "FX3", serialTail: "…0001"),
                               "1": CameraMemory(folder: "B Cam", displayName: "A7S III", serialTail: "…0192")]
+        let plugged = model.drives
+        model.drives = plugged + [folder()]
+        defer { model.drives = plugged }
         for dark in [false, true] {
             func page(_ name: String, _ set: (PanelUI) -> Void) {
                 let ui = PanelUI()

@@ -76,6 +76,30 @@ private struct PlainRow<Trailing: View>: View {
     }
 }
 
+/// A row for a folder on this Mac, with a quiet Remove under its words: it forgets the folder and never deletes anything.
+private struct FolderRow<Trailing: View>: View {
+    let title: String
+    let subtitle: String
+    let removable: Bool
+    let remove: () -> Void
+    @ViewBuilder var trailing: Trailing
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.body13).lineLimit(1)
+                Text(subtitle).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(2).truncationMode(.middle)
+                Button("Remove", action: remove).buttonStyle(LinkStyle()).disabled(!removable).padding(.top, 3)
+                    .accessibilityLabel("Remove \(title)")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing
+        }
+        .frame(minHeight: 30)
+        .padding(.vertical, 4)
+        .padding(.horizontal, Grid.side)
+    }
+}
+
 extension PlainRow where Trailing == EmptyView {
     init(title: String, subtitle: String) { self.init(title: title, subtitle: subtitle) { EmptyView() } }
 }
@@ -137,6 +161,45 @@ private struct CamerasPage: View {
 private struct DrivesPage: View {
     @Environment(AppModel.self) private var model
     @Environment(PanelUI.self) private var ui
+    @State private var refusal: String?
+    @State private var checking = false
+
+    private func subtitle(_ d: DriveState) -> String {
+        let working = model.workingDrive === d ? " · Working drive" : ""
+        if d.volume.isFolder {      // a path breaks at the dots around it, never after one of its own slashes
+            let path = (d.path as NSString).abbreviatingWithTildeInPath.replacingOccurrences(of: "/", with: "/\u{2060}")
+            return "\(d.volume.freeText) · \(path)\(working)"
+        }
+        return "\(d.volume.freeText) · \(d.volume.fsType)\(working)"
+    }
+
+    @ViewBuilder private func buttons(_ d: DriveState) -> some View {
+        if model.workingDrive !== d {
+            Button("Use") {
+                model.use(drive: d)
+                if d.setup == nil { ui.setup = SetupRequest(drive: d) }
+            }
+            .buttonStyle(ActionStyle(kind: .quiet, small: true)).disabled(model.isCopying)
+        }
+        if model.hasChosenRole(for: d.volume) {
+            Button("Not a Drive") { model.forgetChoice(for: d.volume) }
+                .buttonStyle(ActionStyle(kind: .quiet, small: true)).disabled(model.isCopying)
+        }
+        Button(d.setup == nil ? "Set Up…" : "Folder Setup…") { ui.setup = SetupRequest(drive: d) }
+            .buttonStyle(ActionStyle(kind: .quiet, small: true))
+    }
+
+    /// The same picker as setup, then setup for that folder.
+    private func chooseFolder() {
+        guard !checking, let path = Windows.shared.chooseDestinationFolder() else { return }
+        refusal = nil
+        checking = true
+        Task {
+            let found = await model.pick(folder: path)
+            checking = false
+            if let d = found.drive { ui.setup = SetupRequest(drive: d) } else { refusal = found.problem }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -144,21 +207,19 @@ private struct DrivesPage: View {
                 PlainRow(title: "No drive plugged in", subtitle: "Plug in your working drive.")
             }
             ForEach(model.drives) { d in
-                PlainRow(title: model.label(of: d), subtitle: "\(d.volume.freeText) · \(d.volume.fsType)\(model.workingDrive === d ? " · Working drive" : "")") {
-                    if model.workingDrive !== d {
-                        Button("Use") {
-                            model.use(drive: d)
-                            if d.setup == nil { ui.setup = SetupRequest(drive: d) }
-                        }
-                        .buttonStyle(ActionStyle(kind: .quiet, small: true)).disabled(model.isCopying)
-                    }
-                    if model.hasChosenRole(for: d.volume) {
-                        Button("Not a Drive") { model.forgetChoice(for: d.volume) }
-                            .buttonStyle(ActionStyle(kind: .quiet, small: true)).disabled(model.isCopying)
-                    }
-                    Button(d.setup == nil ? "Set Up…" : "Folder Setup…") { ui.setup = SetupRequest(drive: d) }
-                        .buttonStyle(ActionStyle(kind: .quiet, small: true))
+                if d.volume.isFolder {
+                    FolderRow(title: model.label(of: d), subtitle: subtitle(d), removable: !(model.isCopying && model.workingDrive === d),
+                              remove: { model.forget(folder: d) }) { buttons(d) }
+                } else {
+                    PlainRow(title: model.label(of: d), subtitle: subtitle(d)) { buttons(d) }
                 }
+            }
+            PlainRow(title: "This Mac", subtitle: ByteFormat.string(model.macFree) + " free") {
+                Button("Choose Folder…", action: chooseFolder).buttonStyle(LinkStyle()).disabled(checking)
+            }
+            if let refusal {
+                Text(refusal).font(.small12).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Grid.side).padding(.bottom, 4)
             }
             ForEach(model.ignored) { v in
                 PlainRow(title: v.name, subtitle: "Not a working drive: \(model.whyIgnored(v))") {

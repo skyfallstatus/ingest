@@ -25,7 +25,7 @@ struct SetupHost: View {
     var body: some View {
         Group {
             if let drive {
-                if let learned { SetupView(drive: drive, learned: learned, saved: drive.setup, close: close) }
+                if let learned { SetupView(drive: drive, learned: learned, saved: drive.setup, close: close) { chooseAgain(drive) } }
                 else { ReadingDrive(drive: drive, close: close) }
             } else {
                 WhereCopiesGo(choice: $choice, folder: $folder, touched: $touched, close: close) { drive = $0 }
@@ -240,13 +240,14 @@ struct SetupView: View {
     let drive: DriveState
     let learned: DriveSetup?
     let close: () -> Void
+    var changeDrive: (() -> Void)? = nil
 
     @State private var setup: DriveSetup
     @State private var editing = false
     @State private var saveError: String?
 
-    init(drive: DriveState, learned: DriveSetup?, saved: DriveSetup? = nil, close: @escaping () -> Void) {
-        self.drive = drive; self.learned = learned; self.close = close
+    init(drive: DriveState, learned: DriveSetup?, saved: DriveSetup? = nil, close: @escaping () -> Void, changeDrive: (() -> Void)? = nil) {
+        self.drive = drive; self.learned = learned; self.close = close; self.changeDrive = changeDrive
         _setup = State(initialValue: saved ?? learned ?? ShootPlanner.presets().first?.setup ?? DriveSetup(path: [.client], shootName: ShootNameStyle(), inner: [InnerFolder(name: "Footage", role: .footage)], footage: .perCamera))
     }
 
@@ -306,9 +307,14 @@ struct SetupView: View {
                 }
                 .font(.small12)
                 .padding(.leading, Grid.text).padding(.top, 5)
-                Text("Change Layout…").font(.small12).foregroundStyle(Color.ink2).underline(color: Color.ink2.opacity(0.35))
-                    .overlay { PullDown(spoken: "Change the folder layout: a preset, or edit it", entries: { choices }) }
-                    .padding(.leading, Grid.text).padding(.top, 6)
+                HStack(spacing: 12) {
+                    Text("Change Layout…").font(.small12).foregroundStyle(Color.ink2).underline(color: Color.ink2.opacity(0.35))
+                        .overlay { PullDown(spoken: "Change the folder layout: a preset, or edit it", entries: { choices }) }
+                    if let changeDrive {
+                        Button(drive.volume.isFolder ? "Change Folder…" : "Change Drive…", action: changeDrive).buttonStyle(LinkStyle())
+                    }
+                }
+                .padding(.leading, Grid.text).padding(.top, 6)
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 10)
             Foot(bottom: footLine) {

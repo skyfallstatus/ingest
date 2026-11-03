@@ -245,9 +245,9 @@ public enum IngestEngine {
 
         report(.finishing, max(0, job.items.count - 1), "")
         for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
-        // Strong status has to be earned here. A job the drive refuses is weak for good, and one that can't seal reads as cut off.
+        // A job whose drive went can't vouch for anything it did there. Strong status has to be earned here. A job the drive refuses is weak for good, and one that can't seal reads as cut off.
         if !journal.seal(recorded, flushVolume: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
-        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak, lowSpace: lowSpace, driveEnded: ended)
+        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak || ended, lowSpace: lowSpace, driveEnded: ended)
     }
 
     private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped, lowSpace, driveEnded }

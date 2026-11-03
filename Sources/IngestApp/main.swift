@@ -16,8 +16,8 @@ import IngestCore
             let model = Self.model
             guard !model.stores.sawFirstRun, !model.drives.contains(where: { $0.setup != nil }) else { return }
             model.stores.sawFirstRun = true
-            // One drive is read straight away. With several, the person says which: it could be camera media.
-            Windows.shared.bar?.showSetup(drive: model.drives.count == 1 ? model.drives[0] : nil)
+            // Where copies go comes first. One drive plugged in is ticked there; nothing is read until Continue.
+            Windows.shared.bar?.showSetup(drive: nil)
         }
         Self.model.start()
         #if UPDATE_TEST

@@ -2,15 +2,23 @@ import AppKit
 import IngestCore
 import SwiftUI
 
-/// Setup, in the widget like everything else: lines, then the bottom line. Whatever is plugged in, it has something to say.
+/// Setup, in the widget like everything else: where copies go, then the layout, then the bottom line. Nothing is saved until
+/// Use This, and ✕ anywhere leaves everything as it was.
 struct SetupHost: View {
     @Environment(AppModel.self) private var model
-    @State private var drive: DriveState?
+    @State private var drive: DriveState?           // being read and set up, once Continue is pressed
+    @State private var choice: DriveState?          // ticked on the first page
+    @State private var folder: DriveState?          // the folder on this Mac picked there, ticked or not
+    @State private var touched = false              // someone chose: nothing is preselected over them
     @State private var learned: DriveSetup??
     let close: () -> Void
 
-    init(start: DriveState?, close: @escaping () -> Void) {
-        _drive = State(initialValue: start)
+    /// With `choosing`, the first page opens with `start` ticked. Without, setup goes straight to `start`'s layout.
+    init(start: DriveState?, choosing: Bool = false, close: @escaping () -> Void) {
+        _drive = State(initialValue: choosing ? nil : start)
+        _choice = State(initialValue: start)
+        _folder = State(initialValue: start?.volume.isFolder == true ? start : nil)
+        _touched = State(initialValue: start != nil)
         self.close = close
     }
 
@@ -19,21 +27,27 @@ struct SetupHost: View {
             if let drive {
                 if let learned { SetupView(drive: drive, learned: learned, saved: drive.setup, close: close) }
                 else { ReadingDrive(drive: drive, close: close) }
-            } else { WaitingForDrive(close: close) { pick($0) } }
+            } else {
+                WhereCopiesGo(choice: $choice, folder: $folder, touched: $touched, close: close) { drive = $0 }
+            }
         }
         .task(id: drive.map(ObjectIdentifier.init)) { read() }
         // By object, not path: another drive can come back at the same mount path in one look.
         .onChange(of: model.drives.map(ObjectIdentifier.init)) { _, _ in
             if let d = drive, !model.drives.contains(where: { $0 === d }) { drive = nil; learned = nil }
-            if drive == nil, model.drives.count == 1 { drive = model.drives[0] }
+            if let c = choice, !model.drives.contains(where: { $0 === c }) { choice = nil; touched = false }     // what was chosen went: what's there is ticked again
+            if let f = folder, !model.drives.contains(where: { $0 === f }) { folder = nil }
         }
-        .onAppear { if drive == nil, model.drives.count == 1 { drive = model.drives[0] } }
+        .onDisappear { model.dropPendingFolder() }
     }
 
-    /// A drive that only turned up is read but not used: it could be camera media, so it takes Use This to make it the working drive.
-    private func pick(_ d: DriveState) {
-        if model.workingDrive !== d, !model.isCopying { model.use(drive: d) }
-        drive = d
+    /// Back to the first page, with this one ticked.
+    private func chooseAgain(_ d: DriveState) {
+        choice = d
+        if d.volume.isFolder { folder = d }
+        touched = true
+        learned = nil
+        drive = nil
     }
 
     /// Reading a large drive takes a while, and the index usually has it already. A drive that's set up opens from what's
@@ -72,41 +86,132 @@ private struct SetupLine: View {
     }
 }
 
-/// Nothing to read yet, or a choice of drives.
-struct WaitingForDrive: View {
-    @Environment(AppModel.self) private var model
-    let close: () -> Void
-    let pick: (DriveState) -> Void
+/// One choice in a list, the whole row its target. The tick sits in the mark column, so the label lines up with the next page's lines.
+struct ChoiceRow: View {
+    let label: String
+    let value: String
+    let selected: Bool
+    var checking = false
+    let action: () -> Void
 
     var body: some View {
-        let waiting = model.drives.isEmpty
+        Button(action: action) {
+            HStack(spacing: 0) {
+                ZStack {
+                    if checking { Spinner() }
+                    else if selected { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.ink) }
+                }
+                .frame(width: Grid.mark, height: Grid.mark)
+                .padding(.trailing, Grid.markGap)
+                Text(label).font(.body13).kerning(-0.08).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text(value).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(1)
+            }
+            .frame(height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ChoiceStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label), \(value)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private struct ChoiceStyle: ButtonStyle {
+        func makeBody(configuration c: Configuration) -> some View { c.label.opacity(c.isPressed ? 0.6 : 1) }
+    }
+}
+
+/// The first page: where copies go. A drive that's plugged in, or a folder on this Mac.
+struct WhereCopiesGo: View {
+    @Environment(AppModel.self) private var model
+    @Binding var choice: DriveState?
+    @Binding var folder: DriveState?
+    @Binding var touched: Bool
+    let close: () -> Void
+    let next: (DriveState) -> Void
+    @State private var refusal: String?
+    @State private var checking = false
+
+    private var plugged: [DriveState] { model.drives.filter { !$0.volume.isFolder } }
+    private var copying: CardSession? { model.cards.first { $0.isBusy } }
+
+    var body: some View {
         VStack(spacing: 0) {
-            SheetHead(title: "Your working drive", close: close)
+            SheetHead(title: "Where copies go", close: close)
             VStack(alignment: .leading, spacing: 0) {
-                if waiting {
-                    SetupLine(label: "Waiting for a drive", value: "", mark: .running)
+                if plugged.isEmpty {
+                    SetupLine(label: "Waiting for a drive", value: "", mark: .running).frame(height: 30)
                     ForEach(model.ignored) { v in
                         HStack(spacing: 8) {
                             Text(v.name).font(.body13).kerning(-0.08).lineLimit(1)
                             Spacer(minLength: 0)
                             if !v.isReadOnly { Button("It's a Drive") { model.setRole("drive", for: v) }.buttonStyle(ActionStyle(kind: .quiet, small: true)) }
                         }
+                        .padding(.leading, Grid.text)
                         .frame(height: 30)
+                        Text(Self.note(for: v, model: model)).font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, Grid.text).padding(.top, -4).padding(.bottom, 7)
                     }
-                } else {
-                    ForEach(model.drives) { d in
-                        HStack(spacing: 8) {
-                            Text(model.label(of: d)).font(.body13).kerning(-0.08).lineLimit(1)
-                            Spacer(minLength: 0)
-                            Text(d.volume.freeText).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(1)
-                            Button("Use This") { pick(d) }.buttonStyle(ActionStyle(kind: .quiet, small: true))
-                        }
-                        .frame(height: 30)
-                    }
+                }
+                ForEach(plugged) { d in
+                    ChoiceRow(label: model.label(of: d), value: d.volume.freeText, selected: choice === d) { choose(d) }
+                }
+                ChoiceRow(label: folder.map { "\($0.name) on this Mac" } ?? "A folder on this Mac…",
+                          value: folder?.volume.freeText ?? ByteFormat.string(model.macFree) + " free",
+                          selected: choice != nil && choice === folder, checking: checking) { pickFolder() }
+                if let refusal {
+                    Text(refusal).font(.small12).fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Grid.text).padding(.top, 1).padding(.bottom, 7)
                 }
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 9)
-            Foot(bottom: CardSheet.waitingForDrive(model: model)) { EmptyView() }
+            Foot(bottom: Self.bottom(model: model, choice: choice)) {
+                Button("Continue") { if let choice { next(choice) } }
+                    .buttonStyle(ActionStyle())
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(choice == nil || copying != nil || checking)
+            }
+        }
+        .onAppear(perform: preselect)
+        .onChange(of: model.drives.map(ObjectIdentifier.init)) { _, _ in preselect() }
+    }
+
+    /// The bottom line: what Continue would do, or why it can't yet.
+    static func bottom(model: AppModel, choice: DriveState?) -> BottomLine {
+        func line(_ title: String, _ sentence: String) -> BottomLine { BottomLine(kind: .idle, title: title, sentence: sentence) }
+        if let c = model.cards.first(where: { $0.isBusy }) { return line("\(c.name) is copying", "Change this once it's done.") }
+        if let c = choice {
+            if c.volume.isFolder { return line("Copies go to \(c.name)", "On this Mac, in \(c.volume.parentName).") }
+            return line("Copies go to \(model.label(of: c))", "Next, its folders are read. Nothing on it changes.")
+        }
+        if !model.drives.contains(where: { !$0.volume.isFolder }) { return line("Plug in your working drive", "Or choose a folder on this Mac.") }
+        return line("Choose where copies go", "A drive, or a folder on this Mac.")
+    }
+
+    /// Why a volume that's plugged in isn't offered, under its name. With a drive that can't be used, waiting alone is the wrong thing to say.
+    static func note(for v: Volume, model: AppModel) -> String { "It can't be one yet: \(model.whyIgnored(v))" }
+
+    /// One drive plugged in is ticked. With several, the one already set up, if only one is. This Mac never is: that's a choice.
+    private func preselect() {
+        guard !touched else { return }
+        let set = plugged.filter { $0.setup != nil }
+        choice = plugged.count == 1 ? plugged[0] : set.count == 1 ? set[0] : nil
+    }
+
+    private func choose(_ d: DriveState) {
+        choice = d
+        touched = true
+        refusal = nil
+    }
+
+    private func pickFolder() {
+        guard !checking, let path = Windows.shared.chooseDestinationFolder() else { return }
+        refusal = nil
+        checking = true
+        Task {
+            let found = await model.pick(folder: path)
+            checking = false
+            if let d = found.drive { folder = d; choose(d) } else { refusal = found.problem }
         }
     }
 }

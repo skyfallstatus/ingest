@@ -1021,6 +1021,9 @@ import UserNotifications
 
     var isCopying: Bool { cards.contains { $0.isBusy } }
 
+    /// Free space on the Mac's own disk, as a job counts it. Staged in the pictures, so they don't show this Mac's.
+    var macFree: UInt64 { isDemo ? 245_300_000_000 : VolumeWatcher.macFree }
+
     func forgetVolumeChoices() {
         let chosen = stores.overrides.keys
         stores.overrides = [:]

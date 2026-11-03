@@ -515,15 +515,6 @@ struct CardSheet: Equatable {
         return line
     }
 
-    /// Setup's last line while it waits. With a drive plugged in that can't be used, waiting is the wrong thing to say.
-    @MainActor static func waitingForDrive(model: AppModel) -> BottomLine {
-        if !model.drives.isEmpty { return BottomLine(kind: .idle, title: "Choose your working drive", sentence: "Cards are copied there.") }
-        if let v = model.ignored.first {
-            return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "\(v.name) can't be one yet: \(model.whyIgnored(v))")
-        }
-        return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "Cards are copied there.")
-    }
-
     @MainActor private static func path(_ s: Facts) -> String? {
         let c = s.card
         if let split = s.split { return "In \(split.paths.count) folders" }

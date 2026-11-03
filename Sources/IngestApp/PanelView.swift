@@ -21,6 +21,7 @@ struct SetupRequest: Identifiable {
     let id = UUID()
     let drive: DriveState?
     var firstRun = false
+    var choosing = false    // where copies go comes first, with `drive` ticked
     var typing = false      // the Edit page is showing, or Done brought typed changes back and Use This hasn't saved them
 }
 
@@ -74,7 +75,7 @@ struct PanelView: View {
 
     @ViewBuilder private var content: some View {
         if let setup = ui.setup {
-            SetupHost(start: setup.drive) { ui.setup = nil }.id(setup.id)
+            SetupHost(start: setup.drive, choosing: setup.choosing) { ui.setup = nil }.id(setup.id)
         } else if let feedback = ui.feedback {
             FeedbackPage(kind: feedback)
         } else if let page = ui.page {

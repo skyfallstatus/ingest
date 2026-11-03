@@ -1467,11 +1467,10 @@ extension AppModelTests {
         var ntfs = volume(w.a, "NTFS"); ntfs.isReadOnly = true
         w.plugged.now = [(ntfs, .ignored)]
         await w.model.refresh()
-        let foot = CardSheet.waitingForDrive(model: w.model)
-        #expect(foot.sentence.contains("NTFS") && foot.sentence.contains("read-only"), "\(foot.sentence)")
-        w.plugged.now = []
-        await w.model.refresh()
-        #expect(CardSheet.waitingForDrive(model: w.model).sentence == "Cards are copied there.")
+        let note = WhereCopiesGo.note(for: ntfs, model: w.model)
+        #expect(w.model.ignored.map(\.name) == ["NTFS"] && note.contains("read-only"), "\(note)")
+        let foot = WhereCopiesGo.bottom(model: w.model, choice: nil)
+        #expect(foot.title == "Plug in your working drive" && foot.sentence == "Or choose a folder on this Mac.")
     }
 
     @Test func `First-run setup waits for a volume it has to ask about`() async {
@@ -1958,8 +1957,9 @@ extension AppModelTests {
         #expect(ui.stays, "opening Edit and cancelling keeps the earlier changes held")
     }
 
-    // Without the check by object, the page stays on the drive that went and the new one is never read.
-    @Test func `Another drive back at the same path is read in place of the one that went`() async {
+    // Without the check by object, the page stays on the drive that went. It goes back to where copies go, and nothing is read
+    // from the new one before Continue.
+    @Test func `Another drive back at the same path takes setup back to where copies go`() async {
         let w = Bench()
         var entries: [DriveEntry] = []
         for client in 0..<6 {
@@ -1975,11 +1975,14 @@ extension AppModelTests {
         w.model.drives = [first]
         let page = Shown(SetupHost(start: first) {}, model: w.model)
         defer { page.close() }
+        await w.until("the layout page", 5) { page.settle(0.02); return !page.buttons.isEmpty }
         let second = staged(w)
         second.install(index: DriveIndex(entries: entries))
         #expect(first.id == second.id, "same mount path")
         w.model.drives = [second]
-        await w.until("the new drive to be read", 5) { page.settle(0.02); return !second.clients.isEmpty }
+        await w.until("where copies go", 5) { page.settle(0.02); return page.buttons.isEmpty }
+        page.settle(0.3)
+        #expect(second.clients.isEmpty, "nothing is read before Continue")
     }
 
     @Test func `A drive that turns up during setup is read, and isn't the working drive before Use This`() async {

@@ -29,6 +29,26 @@ import IngestCore
         model.copy(card, into: rel)
     }
 
+    /// A folder on this Mac for copies to go to. The widget stays open behind the panel, and has the keyboard again after it.
+    func chooseDestinationFolder() -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder on this Mac for your copies."
+        bar?.holdOpen = true
+        defer {
+            bar?.holdOpen = false
+            bar?.panel.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.path
+    }
+
     func mayQuit(model: AppModel) -> Bool {
         guard model.isCopying else { return true }
         let a = NSAlert()

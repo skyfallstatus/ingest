@@ -23,6 +23,28 @@ import SwiftUI
 
     @MainActor private static var stagedDrive: DriveState?
 
+    /// A folder on this Mac, as a drive.
+    private static func folder() -> DriveState {
+        var v = volume("Footage", path: "/Users/demo/Movies/Footage")
+        v.isFolder = true
+        v.isInternal = true
+        v.free = 180_200_000_000
+        return DriveState(volume: v, ledger: Ledger(driveRoot: "/tmp/demo-ssd-none", mount: MountAnchor(path: "/tmp")), setup: nil)
+    }
+
+    /// Where copies go, as setup opens it: what's ticked is what it would tick, unless `choice` was picked.
+    private struct FirstPage: View {
+        @State private var choice: DriveState?
+        @State private var folder: DriveState?
+        @State private var touched: Bool
+        init(choice: DriveState? = nil) {
+            _choice = State(initialValue: choice)
+            _folder = State(initialValue: choice?.volume.isFolder == true ? choice : nil)
+            _touched = State(initialValue: choice != nil)
+        }
+        var body: some View { WhereCopiesGo(choice: $choice, folder: $folder, touched: $touched, close: {}) { _ in } }
+    }
+
     private static func drive(_ model: AppModel) -> DriveState {
         let d = DriveState(volume: volume("Field SSD", path: "/tmp/demo-ssd"), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none", mount: MountAnchor(path: "/tmp")), setup: sampleSetup())
         var e: [DriveEntry] = []
@@ -325,14 +347,20 @@ import SwiftUI
             func setupPage<V: View>(_ v: V, _ name: String) {
                 save(Widget(dark: dark) { VStack(spacing: 0) { v }.frame(width: Grid.width).background(Color.surface).foregroundStyle(Color.ink) }, name + s, dir, model: model, dark: dark)
             }
-            setupPage(SetupView(drive: d, learned: setup) {}, "first-run")
+            setupPage(SetupView(drive: d, learned: setup) {}, "first-run-layout")
             setupPage(SetupView(drive: empty, learned: nil) {}, "first-run-empty-drive")
             setupPage(ReadingDrive(drive: d) {}, "reading-drive")
             let drives = model.drives
             model.drives = []
-            setupPage(WaitingForDrive(close: {}) { _ in }, "first-run-no-drive")
-            model.drives = [d, empty]
-            setupPage(WaitingForDrive(close: {}) { _ in }, "first-run-two-drives")
+            setupPage(FirstPage(), "first-run-no-drive")
+            model.drives = [d]
+            setupPage(FirstPage(), "first-run")
+            let archive = DriveState(volume: volume("Archive", path: "/tmp/demo-archive", total: 4_000_000_000_000), ledger: Ledger(driveRoot: "/tmp/demo-ssd-none"), setup: nil)
+            model.drives = [d, archive]
+            setupPage(FirstPage(), "first-run-two-drives")
+            let footage = folder()
+            model.drives = [d, archive, footage]
+            setupPage(FirstPage(choice: footage), "first-run-folder")
             model.drives = drives
             setupPage(SetupEditor(setup: .constant(setup)) {}, "setup-editor")
         }

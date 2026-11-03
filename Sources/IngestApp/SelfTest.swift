@@ -603,14 +603,20 @@ import SwiftUI
     private static func setupChecks(drive: DriveState, bar: StatusBar, model: AppModel, out: String) async {
         func noOtherWindow() -> Bool { NSApp.windows.filter { $0.isVisible && $0 !== bar.panel && $0.className != "NSStatusBarWindow" }.isEmpty }
         let view = { bar.panel.contentView }
+        func keyed() async { bar.panel.makeKeyAndOrderFront(nil); _ = await until(2, "key") { bar.panel.isKeyWindow } }
         let plugged = model.drives
         model.drives = []       // no drive at all: it opens anyway, and waits
         bar.hide()
         bar.showSetup(drive: nil)
         check("setup opens in the widget with no drive", await until(5, "setup") { bar.panel.isVisible && bar.ui.setup != nil })
         check("setup: no window of its own", noOtherWindow(), NSApp.windows.map(\.className).joined(separator: " "))
+        check("it asks where copies go first", await until(5, "first page") { bar.ui.setup != nil && firstMenu(in: view()) == nil })
         try? await Task.sleep(for: .milliseconds(200))
-        model.drives = plugged  // the drive turns up, and it continues by itself
+        model.drives = plugged  // the drive turns up, and it's ticked: Continue reads it
+        try? await Task.sleep(for: .milliseconds(300))
+        check("nothing is read before Continue", firstMenu(in: view()) == nil)
+        await keyed()
+        shortcut(.return)
         let shown = await until(30, "learned") { firstMenu(in: view()) != nil }
         let menu = firstMenu(in: view())
         check("the drive is read and the choices appear", shown, "\(menu?.items.map(\.title) ?? [])")
@@ -634,7 +640,6 @@ import SwiftUI
         // Edit is a page of the widget too. Esc is Cancel, and keeps what was there
         func item(_ title: String) { if let m = firstMenu(in: view()), let i = m.items.firstIndex(where: { $0.title == title }) { m.performActionForItem(at: i) } }
         func editing() -> Bool { firstMenu(in: view()) == nil && !editableFields(in: view()).isEmpty }
-        func keyed() async { bar.panel.makeKeyAndOrderFront(nil); _ = await until(2, "key") { bar.panel.isKeyWindow } }
         let picked = look()
         item("Edit…")
         check("Edit opens inside the widget", await until(5, "editor") { editing() })

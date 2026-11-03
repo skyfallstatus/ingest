@@ -115,7 +115,7 @@ struct CardSheet: Equatable {
             return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "Then plug in a card.", action: .setUp)
         }
         if d.setup == nil { return BottomLine(kind: .idle, title: "Set up \(d.name)", sentence: "Then plug in a card.", action: .setUp) }
-        return BottomLine(kind: .idle, title: "Plug in a card", sentence: "This opens by itself.")
+        return BottomLine(kind: .idle, title: "Plug in a card", sentence: "Copies go to \(model.label(of: d)).")
     }
 
     @MainActor static func make(_ c: CardSession, model: AppModel) -> CardSheet {
@@ -300,12 +300,12 @@ struct CardSheet: Equatable {
             // With nowhere it was going, or no drive to go on, what failed may well be a copy that's there.
             let there = !s.hasDestination || s.model.workingDrive == nil
             if s.toGo > 0 { return no(there ? "\(plural(s.toGo)) not proved yet." : s.stillToGo, .failed, s.canName ? .copy(s.total) : nil) }
-            return no(c.failureReasons.first ?? "Something stopped this card being safe.", .failed)
+            return no(c.failureReasons.first ?? "This card isn't proved safe. Check it again.", .failed)
         }
         if s.onlyFoldersMissing, let n = s.folderHold?.paths.count {
             return no("Every file is on \(d). \(n == 1 ? "1 empty folder isn't." : "\(n) empty folders aren't.")", .look, c.phase == .finished ? .eject : nil)
         }
-        if c.isHold { return no("On \(d) and checked, but take a look first.", .look, c.phase == .finished ? .eject : nil) }
+        if c.isHold { return no("On \(d) and checked. See the warning above.", .look, c.phase == .finished ? .eject : nil) }
         if s.model.workingDrive == nil {
             return no("\(plural(s.total)) on this card. \(s.model.drives.isEmpty ? "Plug in your working drive." : "Choose a working drive.")")
         }
@@ -517,11 +517,11 @@ struct CardSheet: Equatable {
 
     /// Setup's last line while it waits. With a drive plugged in that can't be used, waiting is the wrong thing to say.
     @MainActor static func waitingForDrive(model: AppModel) -> BottomLine {
-        if !model.drives.isEmpty { return BottomLine(kind: .idle, title: "Choose your working drive", sentence: "It's where your footage goes.") }
+        if !model.drives.isEmpty { return BottomLine(kind: .idle, title: "Choose your working drive", sentence: "Cards are copied there.") }
         if let v = model.ignored.first {
             return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "\(v.name) can't be one yet: \(model.whyIgnored(v))")
         }
-        return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "It's where your footage goes.")
+        return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "Cards are copied there.")
     }
 
     @MainActor private static func path(_ s: Facts) -> String? {

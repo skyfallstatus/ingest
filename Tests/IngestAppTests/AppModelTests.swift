@@ -270,7 +270,7 @@ extension AppModelTests {
         let c = try await shortOfFolders(w, drive: image.root)
         c.issues.append(CardIssue(severity: .hold, code: "clip.incomplete", message: "A clip looks cut short.", paths: []))
         #expect(addButton(c, w) == nil)
-        #expect(CardSheet.make(c, model: w.model).bottom.sentence.contains("take a look first"))
+        #expect(CardSheet.make(c, model: w.model).bottom.sentence == "On DRIVE-A and checked. See the warning above.")
         c.issues.removeLast()
         c.issues.append(CardIssue(severity: .hold, code: "drive.weak-verify", message: "This drive couldn't confirm it.", paths: []))
         #expect(addButton(c, w) == nil, "a drive that won't confirm has a bigger problem")
@@ -1471,7 +1471,7 @@ extension AppModelTests {
         #expect(foot.sentence.contains("NTFS") && foot.sentence.contains("read-only"), "\(foot.sentence)")
         w.plugged.now = []
         await w.model.refresh()
-        #expect(CardSheet.waitingForDrive(model: w.model).sentence == "It's where your footage goes.")
+        #expect(CardSheet.waitingForDrive(model: w.model).sentence == "Cards are copied there.")
     }
 
     @Test func `First-run setup waits for a volume it has to ask about`() async {
@@ -1819,6 +1819,48 @@ extension AppModelTests {
         changed.path = [.literal("Elsewhere"), .client]
         #expect(SetupEditor.edited(changed, from: learned).learned == nil)
         #expect(SetupEditor.edited(changed, from: learned).path == changed.path)
+    }
+
+    @Test func `With no card in, it says where copies go`() async {
+        let w = Bench()
+        w.plugged.now = [(w.driveA, .drive)]
+        await w.model.refresh()
+        let drive = w.drive(w.driveA)
+        drive.setup = layout
+        w.model.use(drive: drive)
+        #expect(CardSheet.idle(model: w.model).sentence == "Copies go to DRIVE-A.")
+    }
+
+    @Test func `The date says where it came from until someone changes it`() async {
+        let w = Bench()
+        let c = await w.ready()
+        let drive = w.drive(w.driveA)
+        let composer = ShootComposer(model: w.model, card: c, drive: drive, setup: layout)
+        c.draft.date = composer.suggestedDate
+        #expect(composer.dateWords == "today", "this card has no date of its own")
+        c.draft.date = Calendar.current.date(byAdding: .day, value: 3, to: composer.suggestedDate)!
+        #expect(composer.dateWords == "Selected date")
+
+        c.probe.captureDays = [CaptureDay(day: CalendarDay(Date()), fileCount: 2, source: .cameraMetadata)]
+        c.draft.date = composer.suggestedDate
+        #expect(composer.dateWords == "from the card")
+        c.draft.date = Calendar.current.date(byAdding: .day, value: -1, to: composer.suggestedDate)!
+        #expect(composer.dateWords == "Selected date")
+    }
+
+    @Test func `A date far from today says which way it's far`() async {
+        let w = Bench()
+        let c = await w.ready()
+        let composer = ShootComposer(model: w.model, card: c, drive: w.drive(w.driveA), setup: layout)
+        c.draft.date = Calendar.current.date(byAdding: .day, value: -60, to: Date())!
+        #expect(composer.farDate == nil, "a card with no date of its own has no clock to doubt")
+
+        c.probe.captureDays = [CaptureDay(day: CalendarDay(Date()), fileCount: 2, source: .cameraMetadata)]
+        #expect(composer.farDate == "That's 60 days ago. Is the camera's clock right?")
+        c.draft.date = Calendar.current.date(byAdding: .day, value: 61, to: Date())!
+        #expect(composer.farDate == "That's 60 days ahead. Is the camera's clock right?")
+        c.draft.date = Calendar.current.date(byAdding: .day, value: 20, to: Date())!
+        #expect(composer.farDate == nil)
     }
 
     @Test func `Each menu control answers a click all the way across, not only somewhere in it`() throws {

@@ -63,7 +63,7 @@ private struct PlainRow<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.body13).lineLimit(1)
                 if !subtitle.isEmpty {
-                    Text(subtitle).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(2).truncationMode(.middle)
+                    Text(subtitle).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,12 +184,12 @@ private struct SettingsPage: View {
         @Bindable var m = model
         @Bindable var updates = model.updates
         VStack(alignment: .leading, spacing: 0) {
-            PlainRow(title: "Open when a card goes in", subtitle: "Without taking the keyboard.") {
+            PlainRow(title: "Open when a card goes in", subtitle: "The app in front keeps the keyboard.") {
                 Toggle("Open when a card goes in", isOn: $m.opensOnCardIn).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             LoginRow(login: m.loginItem)
-            PlainRow(title: "Update by itself", subtitle: "Once a day it asks GitHub for the latest version, and sends nothing else. It never restarts without you.") {
-                Toggle("Update by itself", isOn: $updates.checksByItself).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            PlainRow(title: "Update automatically", subtitle: "Checks GitHub once a day and sends nothing else. Never restarts without you.") {
+                Toggle("Update automatically", isOn: $updates.checksByItself).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             PlainRow(title: "Verification", subtitle: "XXH64, card and drive read in full")
             VersionRow(updates: m.updates)

@@ -325,7 +325,7 @@ struct SetupEditor: View {
                 note("A card is always copied whole, in its own folder.").padding(.top, 4)
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 10)
-            Foot(bottom: BottomLine(kind: .idle, title: "Not saved yet", sentence: "Use This, on the page before, saves it.")) {
+            Foot(bottom: BottomLine(kind: .idle, title: "Not saved yet", sentence: "Done keeps it here. Use This saves it.")) {
                 HStack(spacing: 6) {
                     Button("Cancel", role: .cancel, action: close).buttonStyle(ActionStyle(kind: .quiet)).keyboardShortcut(.cancelAction)
                     Button("Done", action: done).buttonStyle(ActionStyle()).keyboardShortcut(.defaultAction)

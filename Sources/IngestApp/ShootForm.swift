@@ -170,6 +170,21 @@ struct FieldBox<Field: View, Trailing: View>: View {
         return (hit.name, String(hit.name.dropFirst(typed.count)))
     }
 
+    /// Where the date came from. Once someone has changed it, it's theirs.
+    var dateWords: String {
+        guard CalendarDay(draft.date) == CalendarDay(suggestedDate) else { return "Selected date" }
+        guard cardDay != nil else { return "today" }
+        return offset == 0 ? "from the card" : "from the card, corrected"
+    }
+
+    /// A date far from today, on a card that says so, usually means the camera's clock.
+    var farDate: String? {
+        guard cardDay != nil else { return nil }
+        let gap = Calendar.current.dateComponents([.day], from: draft.date, to: Date()).day ?? 0
+        guard abs(gap) > 30 else { return nil }
+        return "That's \(abs(gap)) days \(gap > 0 ? "ago" : "ahead"). Is the camera's clock right?"
+    }
+
     func prefill() {
         guard !draft.prefilled else { return }
         draft.prefilled = true
@@ -282,11 +297,6 @@ struct ShootForm: View {
         .padding(.horizontal, 9).padding(.vertical, 2)
     }
 
-    private var dateWords: String {
-        guard composer.cardDay != nil else { return "today" }
-        return composer.offset == 0 ? "from the card" : "from the card, corrected"
-    }
-
     private var serial: String { [camera?.displayModel ?? "Camera", camera?.serialTail.map { "serial \($0)" }].compactMap { $0 }.joined(separator: " · ") }
 
     private var facts: some View {
@@ -299,7 +309,7 @@ struct ShootForm: View {
                             .labelsHidden().datePickerStyle(.graphical).padding(12)
                     }
                     .accessibilityLabel("Shoot date")
-                Text(" " + dateWords).foregroundStyle(Color.ink2).lineLimit(1)
+                Text(" " + composer.dateWords).foregroundStyle(Color.ink2).lineLimit(1)
             }
             fact("Camera") {
                 Text(serial).lineLimit(1)
@@ -367,14 +377,13 @@ struct ShootForm: View {
     }
 
     @ViewBuilder private var notes: some View {
-        let gap = abs(Calendar.current.dateComponents([.day], from: draft.date, to: Date()).day ?? 0)
         let offset = composer.offset
         if offset != 0, let cam = camera {
             Text("This \(cam.displayModel)'s clock runs \(abs(offset)) days \(offset > 0 ? "behind" : "ahead"), so the date is corrected.")
                 .font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true).padding(.top, 3)
-        } else if composer.cardDay != nil && gap > 30 {
+        } else if let far = composer.farDate {
             VStack(alignment: .leading, spacing: 2) {
-                Text("That's \(gap) days ago. Is the camera's clock right?").font(.small12).fixedSize(horizontal: false, vertical: true)
+                Text(far).font(.small12).fixedSize(horizontal: false, vertical: true)
                 Button("Use Today") { draft.date = Date() }.buttonStyle(LinkStyle())
             }
             .padding(.top, 4).padding(.bottom, 2)

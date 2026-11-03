@@ -662,7 +662,7 @@ import SwiftUI
         check("Done changes what's offered", picked != look())
         check("Done saves nothing yet", drive.setup == nil)
 
-        // It stays through a click elsewhere, where the widget would otherwise go
+        // First-run setup stays through a click elsewhere, where the widget would otherwise go
         let elsewhere = IngestPanel(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         elsewhere.alphaValue = 0
         func awayAndBack() async -> Bool {
@@ -673,7 +673,7 @@ import SwiftUI
             elsewhere.orderOut(nil)
             return bar.panel.isVisible
         }
-        check("setup stays when focus moves away", await awayAndBack() && bar.ui.setup != nil)
+        check("first-run setup stays when focus moves away", await awayAndBack() && bar.ui.setup != nil)
         await keyed()
         press(.escape, in: bar)
         check("Esc closes setup", await until(2, "closed") { bar.ui.setup == nil })
@@ -682,12 +682,26 @@ import SwiftUI
 
         // From the Drives page, and back to it, by the ✕ itself
         bar.show(.drives)
-        bar.showSetup(drive: drive)
+        bar.ui.setup = SetupRequest(drive: drive)
         check("setup opens over the Drives page", await until(30, "learned") { firstMenu(in: view()) != nil })
         await keyed()
         try? await Task.sleep(for: .milliseconds(400))      // the click has to land after setup has slid in
         click(right: StatusBar.margin.right + 23, top: StatusBar.margin.top + 22, in: bar)
         check("the ✕ lands back on Drives", await until(2, "drives") { bar.ui.setup == nil && bar.ui.page == .drives })
+        bar.hide()
+
+        // Opened from Drives it's a page like any other, and nothing is written before Use This. Edit holds it open.
+        bar.show(.drives)
+        bar.ui.setup = SetupRequest(drive: drive)
+        _ = await until(30, "learned") { firstMenu(in: view()) != nil }
+        check("Folder Setup closes when focus moves away", !(await awayAndBack()) && bar.ui.setup == nil)
+        check("and what was chosen is dropped", drive.setup == nil)
+        bar.show(.drives)
+        bar.ui.setup = SetupRequest(drive: drive)
+        _ = await until(30, "learned") { firstMenu(in: view()) != nil }
+        item("Edit…")
+        _ = await until(5, "editor") { editing() }
+        check("the Edit page stays when focus moves away", await awayAndBack() && bar.ui.setup != nil)
         bar.hide()
 
         // All the way to saved. Return is Use This.

@@ -249,6 +249,7 @@ struct SetupView: View {
 
 /// Everything about the layout, as a page of the widget. Nothing counts until Done.
 struct SetupEditor: View {
+    @Environment(PanelUI.self) private var ui
     @Binding var target: DriveSetup
     let close: () -> Void
     @State private var setup: DriveSetup
@@ -340,7 +341,8 @@ struct SetupEditor: View {
             }
         }
         .tint(Color.ink2)
-        .onAppear(perform: load)
+        .onAppear { load(); ui.editingLayout = true }
+        .onDisappear { ui.editingLayout = false }
     }
 
     private func done() { apply(); close() }

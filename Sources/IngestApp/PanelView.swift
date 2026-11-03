@@ -10,13 +10,18 @@ import SwiftUI
     var setup: SetupRequest?                // over whichever of those is showing, until it's done
     var feedback: FeedbackReport.Kind?      // a report being written, also over whichever is showing
     var feedbackDraft = ""                  // survives the widget closing: going to the browser closes it
+    var editingLayout = false               // setup's Edit page is showing
     @ObservationIgnored var onHeight: ((CGFloat) -> Void)?
+
+    /// Someone's first setup, or folder names being typed: a click elsewhere shouldn't lose either. Cancel and Esc are right there.
+    var stays: Bool { setup?.firstRun == true || editingLayout }
 }
 
 /// Someone setting up a drive. Each one starts fresh, even for the same drive.
 struct SetupRequest: Identifiable {
     let id = UUID()
     let drive: DriveState?
+    var firstRun = false
 }
 
 /// A page that scrolls if it has to, and hangs from the top while the widget changes height around it. The page is laid out at

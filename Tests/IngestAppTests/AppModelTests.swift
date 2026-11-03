@@ -1765,6 +1765,8 @@ extension AppModelTests {
         DriveState(volume: w.driveA, ledger: Ledger(driveRoot: w.a), setup: setup)
     }
 
+    private var layout: DriveSetup { ShootPlanner.presets()[0].setup }
+
     @Test func `Each menu control answers a click all the way across, not only somewhere in it`() throws {
         let w = Bench()
         let head = Shown(SheetHead(title: "No card"), model: w.model)
@@ -1806,4 +1808,48 @@ extension AppModelTests {
         #expect(opened(b)?.items.map(\.title) == ["Acme", "Beta"])
     }
 
+    @Test func `A click elsewhere closes Folder Setup, but not first-run setup or the Edit page`() async {
+        let w = Bench()
+        let bar = quietBar(w.model)
+        defer { bar.panel.orderOut(nil) }
+        func clickElsewhere() async -> Bool {
+            bar.panel.orderFrontRegardless()
+            bar.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+            try? await Task.sleep(for: .milliseconds(50))
+            return bar.panel.isVisible
+        }
+
+        bar.panel.orderFrontRegardless()
+        bar.showSetup(drive: nil)
+        #expect(bar.ui.setup?.firstRun == true)
+        #expect(await clickElsewhere() && bar.ui.setup != nil, "first-run setup stays")
+
+        bar.ui.setup = SetupRequest(drive: nil)
+        #expect(await !clickElsewhere() && bar.ui.setup == nil, "from Drives or the card foot, it goes")
+
+        bar.ui.setup = SetupRequest(drive: nil)
+        bar.ui.editingLayout = true
+        #expect(await clickElsewhere() && bar.ui.setup != nil, "typed folder names are real work")
+        bar.hide()
+        #expect(!bar.ui.stays)
+    }
+
+    @Test func `The Edit page says it's showing, and stops when it goes`() {
+        let w = Bench(), ui = PanelUI(), showing = Showing()
+        let page = Shown(Toggled(showing: showing, setup: layout), model: w.model, ui: ui)
+        defer { page.close() }
+        #expect(ui.editingLayout)
+        showing.on = false
+        page.settle()
+        #expect(!ui.editingLayout)
+    }
+
+}
+
+@MainActor @Observable private final class Showing { var on = true }
+
+private struct Toggled: View {
+    let showing: Showing
+    @State var setup: DriveSetup
+    var body: some View { if showing.on { SetupEditor(setup: $setup) {} } }
 }

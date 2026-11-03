@@ -232,10 +232,10 @@ struct WidgetSpot: Equatable {
         ui.feedback = feedback
     }
 
-    /// Setup opens here, on first launch and from wherever it's asked for, and stays until it's finished or closed.
+    /// Setup on first launch, which stays until it's finished or closed. From anywhere else it's a page like any other.
     func showSetup(drive: DriveState?) {
         if !panel.isVisible { openForUser() }
-        ui.setup = SetupRequest(drive: drive)
+        ui.setup = SetupRequest(drive: drive, firstRun: true)
     }
 
     func hide() {
@@ -244,6 +244,7 @@ struct WidgetSpot: Equatable {
         ui.page = nil
         ui.feedback = nil
         ui.setup = nil
+        ui.editingLayout = false
         panel.orderOut(nil)
         item.button?.highlight(false)
     }
@@ -289,7 +290,7 @@ struct WidgetSpot: Equatable {
         ui.isKey = false
         // A date picker or a menu is part of the widget. Anything else means someone has moved on.
         DispatchQueue.main.async { [self] in
-            guard !holdOpen, ui.setup == nil, !panel.isKeyWindow, panel.attachedSheet == nil, panel.childWindows?.isEmpty ?? true else { return }
+            guard !holdOpen, !ui.stays, !panel.isKeyWindow, panel.attachedSheet == nil, panel.childWindows?.isEmpty ?? true else { return }
             hide()
         }
     }

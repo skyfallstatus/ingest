@@ -10,6 +10,15 @@ struct CameraMemory: Codable, Hashable {
     var serialTail: String?
 }
 
+/// A folder on this Mac that's been made a drive.
+struct SavedFolder: Codable, Hashable, Sendable, Identifiable {
+    var key: String
+    var mark: Data
+    var path: String            // where it was last seen
+    var id: String { key }
+    var name: String { (path as NSString).lastPathComponent }
+}
+
 struct HistoryEntry: Codable, Identifiable, Hashable {
     var id: String
     var date: Date
@@ -71,32 +80,34 @@ final class Stores {
         set { d.set(newValue, forKey: "workingFolder") }
     }
 
-    /// Folders on this Mac that have been made drives, as plain bookmarks, so a folder that's moved is found where it went.
+    /// Folders on this Mac that have been made drives, each a plain bookmark with the key it was saved under, so a folder
+    /// that's moved is found where it went, and a bookmark that now leads to another folder isn't taken for it.
     /// Kept beside the history, so the self-test's own support folder holds its own, and none of anyone else's.
-    var folderBookmarks: [Data] {
+    var savedFolders: [SavedFolder] {
         get {
             guard let data = try? Data(contentsOf: support.appendingPathComponent("folders.plist")) else { return [] }
-            return (try? PropertyListDecoder().decode([Data].self, from: data)) ?? []
+            return (try? PropertyListDecoder().decode([SavedFolder].self, from: data)) ?? []
         }
         set { try? PropertyListEncoder().encode(newValue).write(to: support.appendingPathComponent("folders.plist"), options: .atomic) }
     }
 
     func remember(folder path: String) {
-        guard let mark = try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
-              let key = VolumeWatcher.folder(at: path)?.key else { return }
-        var marks = folderBookmarks.filter { VolumeWatcher.folders([$0]).first?.key != key }
-        marks.append(mark)
-        folderBookmarks = marks
+        guard let v = VolumeWatcher.folder(at: path),
+              let mark = try? URL(fileURLWithPath: v.path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        else { return }
+        savedFolders = savedFolders.filter { $0.key != v.key } + [SavedFolder(key: v.key, mark: mark, path: v.path)]
+    }
+
+    /// Where a saved folder is now, to say where it was if it goes missing.
+    func found(folderKey key: String, at path: String) {
+        var all = savedFolders
+        guard let i = all.firstIndex(where: { $0.key == key }), all[i].path != path else { return }
+        all[i].path = path
+        savedFolders = all
     }
 
     /// Forgets a folder. Nothing in it is touched.
-    func forget(folderKey key: String) {
-        folderBookmarks = folderBookmarks.filter { mark in
-            var stale = false
-            guard let url = try? URL(resolvingBookmarkData: mark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale) else { return true }
-            return VolumeWatcher.folder(at: url.path)?.key != key
-        }
-    }
+    func forget(folderKey key: String) { savedFolders = savedFolders.filter { $0.key != key } }
 
     var cameras: [String: CameraMemory] {
         get { (d.data(forKey: "cameras")).flatMap { try? JSONDecoder().decode([String: CameraMemory].self, from: $0) } ?? [:] }

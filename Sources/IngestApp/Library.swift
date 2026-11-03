@@ -86,8 +86,11 @@ private struct FolderRow<Trailing: View>: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.body13).lineLimit(1)
-                Text(subtitle).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(2).truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.body13).lineLimit(1)
+                    Text(subtitle).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(2).truncationMode(.middle)
+                }
+                .accessibilityElement(children: .combine)
                 Button("Remove", action: remove).buttonStyle(LinkStyle()).disabled(!removable).padding(.top, 3)
                     .accessibilityLabel("Remove \(title)")
             }
@@ -164,12 +167,12 @@ private struct DrivesPage: View {
     @State private var refusal: String?
     @State private var checking = false
 
+    /// A path breaks at the dots around it, never after one of its own slashes.
+    private func shown(_ path: String) -> String { (path as NSString).abbreviatingWithTildeInPath.replacingOccurrences(of: "/", with: "/\u{2060}") }
+
     private func subtitle(_ d: DriveState) -> String {
         let working = model.workingDrive === d ? " · Working drive" : ""
-        if d.volume.isFolder {      // a path breaks at the dots around it, never after one of its own slashes
-            let path = (d.path as NSString).abbreviatingWithTildeInPath.replacingOccurrences(of: "/", with: "/\u{2060}")
-            return "\(d.volume.freeText) · \(path)\(working)"
-        }
+        if d.volume.isFolder { return "\(d.volume.freeText) · \(shown(d.path))\(working)" }
         return "\(d.volume.freeText) · \(d.volume.fsType)\(working)"
     }
 
@@ -203,7 +206,9 @@ private struct DrivesPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if model.drives.isEmpty {
+            if let m = model.missingFolder, !model.missingFolders.contains(where: { $0.key == model.stores.workingDriveKey }) {
+                PlainRow(title: "\(m.name) is missing", subtitle: "It was in \(m.place).")
+            } else if model.drives.isEmpty && model.missingFolder == nil {
                 PlainRow(title: "No drive plugged in", subtitle: "Plug in your working drive.")
             }
             ForEach(model.drives) { d in
@@ -214,8 +219,14 @@ private struct DrivesPage: View {
                     PlainRow(title: model.label(of: d), subtitle: subtitle(d)) { buttons(d) }
                 }
             }
+            // Saved, and not where it could be used: it stays listed until it's back, or removed.
+            ForEach(model.missingFolders) { f in
+                let working = f.key == model.stores.workingDriveKey ? " · Working drive" : ""
+                FolderRow(title: f.name, subtitle: "Missing · was \(shown(f.path))\(working)", removable: !model.isCopying,
+                          remove: { model.forget(missing: f) }) { EmptyView() }
+            }
             PlainRow(title: "This Mac", subtitle: ByteFormat.string(model.macFree) + " free") {
-                Button("Choose Folder…", action: chooseFolder).buttonStyle(LinkStyle()).disabled(checking)
+                Button("Choose Folder…", action: chooseFolder).buttonStyle(LinkStyle()).disabled(checking || model.isCopying)
             }
             if let refusal {
                 Text(refusal).font(.small12).fixedSize(horizontal: false, vertical: true)

@@ -610,9 +610,9 @@ import SwiftUI
         let picked = await model.pick(folder: path)
         guard let folder = picked.drive else { check("folder: it can be picked", false, picked.problem ?? ""); return }
         check("folder: picked, it's a drive on this Mac", folder.volume.isFolder && folder.volume.isInternal)
-        check("folder: picking saves nothing", model.workingDrive !== folder && Stores().folderBookmarks.isEmpty)
+        check("folder: picking saves nothing", model.workingDrive !== folder && Stores().savedFolders.isEmpty)
         let setup = ShootPlanner.presets()[0].setup
-        check("folder: Use This saves it", model.accept(setup: setup, for: folder) == nil && model.workingDrive === folder && Stores().folderBookmarks.count == 1)
+        check("folder: Use This saves it", model.accept(setup: setup, for: folder) == nil && model.workingDrive === folder && Stores().savedFolders.count == 1)
         check("folder: its setup is inside it", FileManager.default.fileExists(atPath: path + "/.ingest/setup.json"))
         _ = await until(60, "ready") { card.phase == .ready && !card.isMatching }
         model.start(card, destination: Destination(footageRoot: "Folder pass"))
@@ -631,7 +631,7 @@ import SwiftUI
 
         // Remove forgets it, and deletes nothing
         if let d = model.workingDrive { model.forget(folder: d) }
-        check("folder: Remove forgets it", await until(20, "forgotten") { model.workingDrive == nil && !model.drives.contains { $0.volume.isFolder } } && Stores().folderBookmarks.isEmpty)
+        check("folder: Remove forgets it", await until(20, "forgotten") { model.workingDrive == nil && !model.drives.contains { $0.volume.isFolder } } && Stores().savedFolders.isEmpty)
         check("folder: and leaves what's in it", FileManager.default.fileExists(atPath: path + "/Folder pass"))
     }
 

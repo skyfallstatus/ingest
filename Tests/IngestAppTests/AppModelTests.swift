@@ -47,6 +47,14 @@ private final class Plugged: @unchecked Sendable {
     }
 }
 
+/// Counts calls from any thread.
+private final class Calls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+}
+
 /// A drive that stops taking writes, from a fault hook on the engine's thread.
 private final class Dying: @unchecked Sendable {
     private let lock = NSLock()
@@ -2022,23 +2030,29 @@ extension AppModelTests {
 
     // MARK: A folder on this Mac
 
-    private func bookmark(_ path: String) throws -> Data {
-        try URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    private func bookmark(_ path: String) throws -> SavedFolder {
+        let v = try #require(VolumeWatcher.folder(at: path))
+        return SavedFolder(key: v.key, mark: try URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+                           path: v.path)
     }
 
     @Test func `A folder keeps its key through a rename, and a new folder in its place is another drive`() throws {
         let parent = temp(), path = parent + "/Footage"
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         let mark = try bookmark(path)
-        let first = try #require(VolumeWatcher.folders([mark]).first)
+        let first = try #require(VolumeWatcher.folders([mark]).found.first)
         #expect(first.isFolder && first.name == "Footage" && first.key.hasPrefix("folder|"))
         try FileManager.default.moveItem(atPath: path, toPath: parent + "/Shoots")
-        let moved = try #require(VolumeWatcher.folders([mark]).first, "the bookmark follows it")
+        let moved = try #require(VolumeWatcher.folders([mark]).found.first, "the bookmark follows it")
         #expect(moved.key == first.key && moved.name == "Shoots")
         #expect(first.anchor?.isCurrent == false, "and what was proved there is over")
         try FileManager.default.removeItem(atPath: parent + "/Shoots")
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         #expect(VolumeWatcher.folder(at: path)?.key != first.key)
+        var resaved = mark
+        resaved.mark = try URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        #expect(VolumeWatcher.folders([resaved]).found.isEmpty, "a bookmark that leads to another folder isn't that folder")
+        #expect(VolumeWatcher.folders([resaved]).missing.map(\.key) == [first.key], "and it stays listed, to be removed")
     }
 
     @Test func `The self-test's fence keeps out every saved folder it doesn't name`() throws {
@@ -2046,14 +2060,14 @@ extension AppModelTests {
         let mark = try bookmark(path)
         setenv("INGEST_ONLY_VOLUMES", "NOTHING", 1)
         defer { unsetenv("INGEST_ONLY_VOLUMES"); unsetenv("INGEST_ONLY_FOLDERS") }
-        #expect(VolumeWatcher.folders([mark]).isEmpty)
+        #expect(VolumeWatcher.folders([mark]).found.isEmpty && VolumeWatcher.folders([mark]).missing.isEmpty)
         setenv("INGEST_ONLY_FOLDERS", temp() + ":" + path, 1)
-        #expect(VolumeWatcher.folders([mark]).map(\.path) == [FolderCheck.real(path)])
+        #expect(VolumeWatcher.folders([mark]).found.map(\.path) == [FolderCheck.real(path)])
     }
 
     @Test func `A folder is a drive once it's picked, never chosen on its own, and saved only by Use This`() async throws {
         let w = Bench()
-        defer { w.model.stores.folderBookmarks = []; w.model.stores.workingDriveKey = nil; w.model.stores.workingFolderPath = nil }
+        defer { w.model.stores.savedFolders = []; w.model.stores.workingDriveKey = nil; w.model.stores.workingFolderPath = nil }
         let path = temp() + "/Footage"
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         w.plugged.now = [(w.cardVolume, .card)]
@@ -2062,13 +2076,13 @@ extension AppModelTests {
         let d = try #require(picked.drive, "\(picked.problem ?? "")")
         #expect(d.volume.isFolder && d.volume.isInternal)
         #expect(w.model.workingDrive == nil, "picking isn't choosing")
-        #expect(w.model.stores.folderBookmarks.isEmpty, "nothing is saved yet")
+        #expect(w.model.stores.savedFolders.isEmpty, "nothing is saved yet")
         w.model.dropPendingFolder()
         #expect(!w.model.drives.contains { $0 === d }, "closing setup leaves everything as it was")
         let again = try #require(await w.model.pick(folder: path).drive)
         w.model.use(drive: again)
         #expect(w.model.workingDrive === again)
-        #expect(w.model.stores.folderBookmarks.count == 1)
+        #expect(w.model.stores.savedFolders.count == 1)
         await w.model.refresh()
         #expect(w.model.drives.contains { $0 === again }, "found again from its bookmark")
         let c = w.model.cards[0]
@@ -2079,19 +2093,59 @@ extension AppModelTests {
         try FileManager.default.moveItem(atPath: path, toPath: path + " moved")
         #expect(!c.isSafe(on: again), "a folder moved away takes its proof with it")
         w.model.forget(folder: again)
-        #expect(w.model.stores.folderBookmarks.isEmpty && w.model.workingDrive == nil)
+        #expect(w.model.stores.savedFolders.isEmpty && w.model.workingDrive == nil)
         #expect(FileManager.default.fileExists(atPath: path + " moved/S/one.bin"), "forgetting a folder deletes nothing")
+    }
+
+    // Picking a folder looks at the volumes, and a look started meanwhile made that look stand down, so the pick came back
+    // with no drive and nothing to say.
+    @Test func `Picking a folder brings back its drive, even when another look is still out`() async throws {
+        let w = Bench()
+        defer { w.model.stores.savedFolders = []; w.model.findVolumes = { _, _ in [] } }
+        let path = temp() + "/Footage"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        let plugged = w.plugged, gate = Dying(), calls = Calls()
+        w.model.findVolumes = { _, _ in
+            let n = calls.next(), end = Date().addingTimeInterval(10)
+            if n == 1 { while calls.count < 2 && Date() < end { usleep(5_000) } }     // the pick's look waits for another to start,
+            if n == 2 { while !gate.now && Date() < end { usleep(5_000) } }           // which is still out when it lands
+            return plugged.now
+        }
+        let pick = Task { await w.model.pick(folder: path) }
+        await w.until("the pick to look") { calls.count >= 1 }
+        let other = Task { await w.model.refresh() }
+        let picked = await pick.value
+        gate.now = true
+        await other.value
+        let d = try #require(picked.drive, "\(picked.problem ?? "nothing said")")
+        #expect(d.volume.isFolder && w.model.drives.contains { $0 === d })
+    }
+
+    // Choose Folder… while a card copied wrote the folder's setup, then Use This quietly did nothing.
+    @Test func `Use This for another drive while a card copies writes nothing and says why`() async throws {
+        let w = Bench()
+        let c = await w.ready()
+        let other = w.drive(w.driveB)
+        c.phase = .copying
+        defer { c.phase = .ready }
+        let why = w.model.accept(setup: layout, for: other)
+        #expect(why == "\(c.name) is copying. Change this once it's done.")
+        #expect(!FileManager.default.fileExists(atPath: other.path + "/" + AppInfo.driveFolder + "/setup.json"), "nothing written")
+        #expect(w.model.workingDrive === w.drive(w.driveA))
     }
 
     @Test func `A folder is refused, plainly, wherever copies shouldn't go`() throws {
         let home = FolderCheck.real(NSHomeDirectory())
         for path in ["/", home, home + "/Library/Caches/x", home + "/Library/Mobile Documents/com~apple~CloudDocs/Footage",
                      home + "/Library/CloudStorage/Drive/Footage", home + "/Documents", home + "/Desktop/Footage", home + "/Downloads/x",
-                     "/Applications/Footage", "/System/Footage", "/Library/Footage", "/Volumes", home + "/.Trash/Footage"] {
+                     "/Applications/Footage", "/System/Footage", "/Library/Footage", "/Volumes", home + "/.Trash/Footage",
+                     "/tmp/Footage", "/private/tmp/Footage", "/private/var/folders/xy/Footage", "/var/tmp/Footage"] {
             let why = try #require(FolderCheck.placeProblem(path), "\(path)")
             #expect(why.hasSuffix(".") && !why.contains("\n"), "\(why)")
         }
         #expect(FolderCheck.placeProblem(home + "/Movies/Footage") == nil)
+        #expect(FolderCheck.placeProblem("/private/tmp/Footage") == "That's a temporary folder, which macOS empties. Choose another folder.")
+        #expect(FolderCheck.placeProblem("/Volumes/Media/Footage") == "That's on Media, another disk in this Mac. To copy there, use It's a Drive on Media.")
         let drive = temp(), inside = drive + "/Sub/Footage"
         try FileManager.default.createDirectory(atPath: inside, withIntermediateDirectories: true)
         #expect(FolderCheck.problem(with: drive, drives: [], cards: []) == nil)

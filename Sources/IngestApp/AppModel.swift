@@ -176,7 +176,9 @@ import UserNotifications
         VolumeWatcher.scan(allowDiskImages: allow).map { ($0, VolumeWatcher.role(of: $0, overrides: overrides)) }
     }
     /// Saved folders on this Mac, where they are now. Off the main thread too.
-    var findFolders: @Sendable (_ bookmarks: [Data]) -> [Volume] = { VolumeWatcher.folders($0) }
+    var findFolders: @Sendable (_ saved: [SavedFolder]) -> (found: [Volume], missing: [SavedFolder]) = { VolumeWatcher.folders($0) }
+    /// Saved folders that aren't where they could be used, so Drives can still show them, and Remove them.
+    private(set) var missingFolders: [SavedFolder] = []
     /// A folder picked in setup and not saved yet. It's offered like a drive that's plugged in until Use This saves it, or setup closes.
     private(set) var pendingFolder: Volume?
     var isDemo = false
@@ -230,20 +232,23 @@ import UserNotifications
         looks += 1
         let look = looks
         let allow = stores.allowDiskImages, overrides = stores.overrides, find = findVolumes, findFolders = findFolders
-        let marks = stores.folderBookmarks, pending = pendingFolder
+        let saved = stores.savedFolders, pending = pendingFolder
         let known = Set(drives.filter(\.isCurrent).map(\.path))
         // A new drive's ledger and setup are read here too: a large ledger is no reason to freeze the widget.
-        let found: [(Volume, VolumeRole, (Ledger, DriveSetup?)?)] = await Task.detached(priority: .userInitiated) {
+        let (found, missing): ([(Volume, VolumeRole, (Ledger, DriveSetup?)?)], [SavedFolder]) = await Task.detached(priority: .userInitiated) {
             // Folders aren't plugged in: they're wherever the bookmarks lead, and always drives.
-            var folders = findFolders(marks)
+            var (folders, missing) = findFolders(saved)
             if let pending, !folders.contains(where: { $0.key == pending.key }), let now = VolumeWatcher.folder(at: pending.path), now.key == pending.key {
                 folders.append(now)
             }
-            return (find(allow, overrides) + folders.map { ($0, VolumeRole.drive) }).map { v, role in
+            missing.removeAll { m in folders.contains { $0.key == m.key } }
+            return ((find(allow, overrides) + folders.map { ($0, VolumeRole.drive) }).map { v, role in
                 (v, role, role == .drive && !known.contains(v.path) ? (Ledger(driveRoot: v.path, mount: v.anchor), Stores.setup(onDrive: v.path)) : nil)
-            }
+            }, missing)
         }.value
         guard look == looks else { return }
+        missingFolders = missing
+        for (v, _, _) in found where v.isFolder { stores.found(folderKey: v.key, at: v.path) }
 
         /// The same mount, still there. A path is only a place: another volume can be at it before anyone hears the first one go.
         func stillHere(_ v: Volume) -> Bool { v.isCurrent && found.contains { $0.0.path == v.path && $0.0.key == v.key } }
@@ -349,10 +354,16 @@ import UserNotifications
             return (v, nil)
         }.value
         guard let v = found.0 else { return (nil, found.1) }
-        if let d = drives.first(where: { $0.volume.key == v.key && $0.isCurrent }) { return (d, nil) }
+        func here() -> DriveState? { drives.first { $0.volume.key == v.key && $0.isCurrent } }
+        if let d = here() { return (d, nil) }
         pendingFolder = v
-        await refresh()
-        return (drives.first { $0.volume.key == v.key }, nil)
+        // A look someone else started meanwhile makes this one stand down, so it's asked again until one lands.
+        for _ in 0..<5 {
+            await refresh()
+            if let d = here() { return (d, nil) }
+            if pendingFolder?.key != v.key { break }    // setup closed, or the folder was saved, while it looked
+        }
+        return (nil, "Ingest couldn't open that folder just now. Choose it again.")
     }
 
     /// Setup closed without Use This: a folder picked there was never saved, and goes as it came.
@@ -364,7 +375,7 @@ import UserNotifications
         }
     }
 
-    private func isSaved(folder d: DriveState) -> Bool { findFolders(stores.folderBookmarks).contains { $0.key == d.volume.key } }
+    private func isSaved(folder d: DriveState) -> Bool { stores.savedFolders.contains { $0.key == d.volume.key } }
 
     /// Forgets a folder that was a drive. Nothing in it is touched, and it can be chosen again.
     func forget(folder d: DriveState) {
@@ -372,6 +383,15 @@ import UserNotifications
         stores.forget(folderKey: d.volume.key)
         if pendingFolder?.key == d.volume.key { pendingFolder = nil }
         release(d.volume)
+        scheduleRefresh()
+    }
+
+    /// Forgets a saved folder that isn't where it could be used. Nothing anywhere is touched.
+    func forget(missing f: SavedFolder) {
+        guard !isCopying else { return }
+        stores.forget(folderKey: f.key)
+        missingFolders.removeAll { $0.key == f.key }
+        if stores.workingDriveKey == f.key, workingDrive == nil { stores.workingDriveKey = nil; stores.workingFolderPath = nil }
         scheduleRefresh()
     }
 
@@ -1035,6 +1055,8 @@ import UserNotifications
 
     /// Nil when it's saved. Otherwise, what went wrong and what to do about it.
     func accept(setup: DriveSetup, for d: DriveState) -> String? {
+        // A job belongs to its drive, so the drive can't change under it, and nothing is written to another one meanwhile.
+        if d !== workingDrive, let c = cards.first(where: \.isBusy) { return "\(c.name) is copying. Change this once it's done." }
         guard setup.staysOnDrive else { return "A folder name in this layout would lead off \(d.name). Change it and try again." }
         do { try stores.save(setup: setup, onDrive: d.path) }
         catch { return "Couldn't save to \(d.name): \(error.localizedDescription) Check it can be written to and has room, then try again." }

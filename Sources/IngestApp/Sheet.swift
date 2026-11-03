@@ -355,7 +355,8 @@ struct CardSheet: Equatable {
             } else if c.read != nil, !s.working {
                 let missing = s.model.missingFolder.map { "\($0.name) isn't in \($0.place) any more." }
                 line.detail = [c.error ?? missing ?? (unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on.")]
-                line.actions = unset.map { .useDrive(id: $0.id, name: s.model.label(of: $0)) }
+                // A folder says it's on this Mac when it's the only choice. Beside a drive, that wouldn't fit.
+                line.actions = unset.map { .useDrive(id: $0.id, name: s.model.label(of: $0) + ($0.volume.isFolder && unset.count == 1 ? " on this Mac" : "")) }
             }
             return line
         }

@@ -86,21 +86,27 @@ final class VolumeWatcher: @unchecked Sendable {
         return out
     }
 
-    /// Saved folders, where they are now. A folder in the Trash is gone, and one that has since moved somewhere it couldn't
-    /// be chosen isn't offered. While the self-test fences the app in, only the folders it names exist.
-    static func folders(_ bookmarks: [Data]) -> [Volume] {
+    /// Saved folders, where they are now, and the ones that aren't anywhere they could be used. A folder in the Trash is gone,
+    /// one that has since moved somewhere it couldn't be chosen isn't offered, and a bookmark that leads to a folder with
+    /// another key leads to another folder. While the self-test fences the app in, only the folders it names exist.
+    static func folders(_ saved: [SavedFolder]) -> (found: [Volume], missing: [SavedFolder]) {
         let env = ProcessInfo.processInfo.environment
         let fence = env["INGEST_ONLY_VOLUMES"] == nil ? nil : Set((env["INGEST_ONLY_FOLDERS"] ?? "").split(separator: ":").map { FolderCheck.real(String($0)) })
-        var out: [Volume] = []
-        for mark in bookmarks {
+        var found: [Volume] = [], missing: [SavedFolder] = []
+        for s in saved {
+            if let fence, !fence.contains(FolderCheck.real(s.path)) { continue }
             var stale = false
-            guard let url = try? URL(resolvingBookmarkData: mark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale) else { continue }
-            let path = FolderCheck.real(url.path)
-            if let fence, !fence.contains(path) { continue }
-            guard !FolderCheck.isInTrash(path), FolderCheck.placeProblem(path) == nil, let v = folder(at: path) else { continue }
-            if !out.contains(where: { $0.key == v.key }) { out.append(v) }
+            if let url = try? URL(resolvingBookmarkData: s.mark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                let path = FolderCheck.real(url.path)
+                if fence?.contains(path) != false, !FolderCheck.isInTrash(path), FolderCheck.placeProblem(path) == nil,
+                   let v = folder(at: path), v.key == s.key {
+                    if !found.contains(where: { $0.key == v.key }) { found.append(v) }
+                    continue
+                }
+            }
+            missing.append(s)
         }
-        return out
+        return (found, missing)
     }
 
     /// A folder as a drive, as it is now. Nil if it isn't a folder on a local internal volume.

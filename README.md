@@ -42,7 +42,7 @@ When macOS asks if Ingest can read removable volumes, say yes. You'll see this q
 The first time you plug in a drive, Ingest reads how your folders are organised and follows the same pattern.
 
 <p align="center">
-  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 built the same way, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, and a Use This button. It settles on No card, with Plug in a card and This opens by itself.">
+  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 under Match this layout, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, also Photo and Project, and a Use This button under Layout found. It settles on No card, with Plug in a card and Copies go to Field SSD.">
 </p>
 
 Can't see the icon? A full menu bar can hide it. Open Ingest from Applications again and the widget appears.

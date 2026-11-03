@@ -621,10 +621,15 @@ import SwiftUI
             v.cacheDisplay(in: v.bounds, to: rep)
             return rep.tiffRepresentation
         }
+        try? await Task.sleep(for: .milliseconds(400))      // the click has to land after setup has slid in
         let before = look()
+        let pressed = clickChangeLayout(in: bar)
+        check("a click on the Change Layout words opens its menu", pressed?.items.contains { $0.title == "Edit…" } == true, "\(pressed?.items.count ?? 0) items")
         if let m = menu, let i = m.items.firstIndex(where: { $0.title == ShootPlanner.presets()[0].name }) { m.performActionForItem(at: i) }
         try? await Task.sleep(for: .milliseconds(400))
         check("choosing a preset changes what's offered", before != nil && before != look())
+        let again = clickChangeLayout(in: bar)
+        check("and the Change Layout words still open it after a preset", again?.items.contains { $0.title == "Edit…" } == true, "\(again?.items.count ?? 0) items")
 
         // Edit is a page of the widget too. Esc is Cancel, and keeps what was there
         func item(_ title: String) { if let m = firstMenu(in: view()), let i = m.items.firstIndex(where: { $0.title == title }) { m.performActionForItem(at: i) } }
@@ -702,9 +707,15 @@ import SwiftUI
 
     private static func firstMenu(in view: NSView?) -> NSMenu? {
         guard let view else { return nil }
-        if let pop = view as? PullDownButton, let m = pop.pullDown, m.items.contains(where: { $0.title == "Edit…" }) { return m }
-        for v in view.subviews { if let m = firstMenu(in: v) { return m } }
-        return nil
+        guard let button = layoutButton(in: view) else { return nil }
+        return PullDown.menu(button.entries())
+    }
+
+    /// The button over the Change Layout words.
+    private static func layoutButton(in view: NSView?) -> PullDownButton? {
+        guard let view else { return nil }
+        if let b = view as? PullDownButton, PullDown.menu(b.entries()).items.contains(where: { $0.title == "Edit…" }) { return b }
+        return view.subviews.lazy.compactMap { layoutButton(in: $0) }.first
     }
 
     // MARK: Keys, delivered the way AppKit would
@@ -735,7 +746,22 @@ import SwiftUI
 
     /// A real click, measured in from the widget's top right corner.
     private static func click(right: CGFloat, top: CGFloat, in bar: StatusBar) {
-        let at = NSPoint(x: bar.panel.frame.width - right, y: bar.panel.frame.height - top)
+        click(at: NSPoint(x: bar.panel.frame.width - right, y: bar.panel.frame.height - top), in: bar)
+    }
+
+    /// A real click on the Change Layout words, which says what opened. The menu is caught rather than shown: one on screen would wait for a person.
+    private static func clickChangeLayout(in bar: StatusBar) -> NSMenu? {
+        guard let button = layoutButton(in: bar.panel.contentView) else { return nil }
+        var opened: NSMenu?
+        let shows = button.present
+        button.present = { menu, _, _ in opened = menu }
+        defer { button.present = shows }
+        click(at: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil), in: bar)
+        return opened
+    }
+
+    /// A real click, at a point in the panel's own window.
+    private static func click(at: NSPoint, in bar: StatusBar) {
         for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             if let e = NSEvent.mouseEvent(with: kind, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: bar.panel.windowNumber,
                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { bar.panel.sendEvent(e) }

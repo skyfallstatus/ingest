@@ -216,7 +216,7 @@ struct SetupView: View {
                 .font(.body13)
                 .padding(.leading, Grid.text).padding(.top, 5)
                 Text("Change Layout…").font(.small12).foregroundStyle(Color.ink2).underline(color: Color.ink2.opacity(0.35))
-                    .overlay { PullDown(spoken: "Change the folder layout: a preset, or edit it", entries: choices) }
+                    .overlay { PullDown(spoken: "Change the folder layout: a preset, or edit it", entries: { choices }) }
                     .padding(.leading, Grid.text).padding(.top, 6)
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 10)

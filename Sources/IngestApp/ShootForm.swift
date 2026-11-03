@@ -417,12 +417,12 @@ private struct TabHint: View {
 }
 
 /// Every client on the drive, for when typing isn't the way in.
-private struct ClientList: View {
+struct ClientList: View {
     let clients: [ClientFolder]
     let pick: (String) -> Void
     var body: some View {
         PullDown(symbol: "chevron.down", color: .tertiaryLabelColor, size: 8, spoken: "Choose a client",
-                 entries: clients.prefix(40).map { c in .item(c.name) { pick(c.name) } })
+                 entries: { clients.prefix(40).map { c in .item(c.name) { pick(c.name) } } })
             .frame(width: 16, height: 16)
     }
 }

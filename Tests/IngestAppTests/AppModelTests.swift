@@ -1,5 +1,7 @@
 // The real AppModel, against real files in folders. Volumes are handed in, so no test ever looks at what's plugged in.
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import IngestApp
 @testable import IngestCore
@@ -1705,4 +1707,103 @@ extension AppModelTests {
         try! FileManager.default.createDirectory(atPath: d.path + "/" + first.footagePath, withIntermediateDirectories: true)
         #expect(composer.plan.footagePath != first.footagePath)
     }
+}
+
+/// A real page in a window nobody can see or click, looked at the way AppKit looks at it when a click lands.
+@MainActor private final class Shown {
+    let host: NSView
+    let window: NSWindow
+
+    init<V: View>(_ view: V, model: AppModel, ui: PanelUI? = nil, settling: TimeInterval = 0.15) {
+        _ = NSApplication.shared
+        host = NSHostingView(rootView: view.frame(width: Grid.width).environment(model).environment(ui ?? PanelUI()))
+        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: Grid.width, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.contentView = host
+        window.orderFrontRegardless()
+        settle(settling)
+    }
+
+    func settle(_ seconds: TimeInterval = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    func close() { window.orderOut(nil) }
+    var buttons: [IngestApp.PullDownButton] { pullDowns(in: host) }
+
+    /// What a click at the left, the middle and the right of `b` lands on.
+    func hits(_ b: IngestApp.PullDownButton) -> [NSView?] {
+        [b.bounds.minX + 1, b.bounds.midX, b.bounds.maxX - 1].map { x in
+            guard let frame = host.superview else { return nil }
+            return host.hitTest(frame.convert(b.convert(NSPoint(x: x, y: b.bounds.midY), to: nil), from: nil))
+        }
+    }
+}
+
+@MainActor private func pullDowns(in view: NSView?) -> [IngestApp.PullDownButton] {
+    guard let view else { return [] }
+    return ((view as? IngestApp.PullDownButton).map { [$0] } ?? []) + view.subviews.flatMap { pullDowns(in: $0) }
+}
+
+/// A status bar that shows nothing and takes nothing: no mark in the menu bar, no clicks, no keyboard.
+@MainActor private func quietBar(_ model: AppModel) -> StatusBar {
+    let bar = StatusBar(model: model)
+    bar.item.isVisible = false
+    bar.panel.alphaValue = 0
+    bar.panel.ignoresMouseEvents = true
+    return bar
+}
+
+// In the app model's suite for the reason above: every model shares one saved working drive.
+extension AppModelTests {
+    private func opened(_ b: IngestApp.PullDownButton) -> NSMenu? {
+        var menu: NSMenu?
+        b.present = { m, _, _ in menu = m }
+        _ = b.sendAction(b.action, to: b.target)
+        return menu
+    }
+
+    private func staged(_ w: Bench, setup: DriveSetup? = nil) -> DriveState {
+        DriveState(volume: w.driveA, ledger: Ledger(driveRoot: w.a), setup: setup)
+    }
+
+    @Test func `Each menu control answers a click all the way across, not only somewhere in it`() throws {
+        let w = Bench()
+        let head = Shown(SheetHead(title: "No card"), model: w.model)
+        let form = Shown(ClientList(clients: [ClientFolder(name: "Acme", path: "Clients/Acme", lastShoot: nil)]) { _ in }, model: w.model)
+        let setup = Shown(SetupView(drive: staged(w), learned: nil) {}, model: w.model)
+        defer { [head, form, setup].forEach { $0.close() } }
+
+        let more = try #require(head.buttons.first), chevron = try #require(form.buttons.first), change = try #require(setup.buttons.first)
+        #expect(more.frame.size == CGSize(width: 22, height: 20))
+        #expect(chevron.frame.size == CGSize(width: 16, height: 16))
+        let words = NSAttributedString(string: "Change Layout…", attributes: [.font: NSFont.systemFont(ofSize: 12)]).size().width
+        #expect(abs(change.frame.width - words) <= 3, "\(change.frame) over words \(words) wide")
+        for (page, button) in [(head, more), (form, chevron), (setup, change)] {
+            #expect(page.hits(button).allSatisfy { $0 === button }, "\(page.hits(button))")
+        }
+    }
+
+    // StatusBar lays the panel out before main.swift has the bar to give to Windows.shared.
+    @Test func `The quiet control has its menu when the page was built before the bar was known`() throws {
+        let w = Bench()
+        Windows.shared.bar = nil
+        let bar = quietBar(w.model)
+        defer { Windows.shared.bar = nil }
+        bar.panel.orderFrontRegardless()
+        defer { bar.panel.orderOut(nil) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        let more = try #require(pullDowns(in: bar.panel.contentView).first, "the No card page has the control")
+        Windows.shared.bar = bar
+        let titles = opened(more)?.items.map(\.title) ?? []
+        #expect(titles.contains("History") && titles.contains("Quit \(AppInfo.name)"), "\(titles)")
+    }
+
+    @Test func `A menu is read when it's pressed, so it's never one from earlier`() {
+        let b = IngestApp.PullDownButton(frame: NSRect(x: 0, y: 0, width: 22, height: 20))
+        var names = ["Acme"]
+        b.entries = { names.map { .item($0) {} } }
+        #expect(opened(b)?.items.map(\.title) == ["Acme"])
+        names.append("Beta")
+        #expect(opened(b)?.items.map(\.title) == ["Acme", "Beta"])
+    }
+
 }

@@ -114,7 +114,7 @@ private struct ContentHeight: PreferenceKey {
 struct MoreMenu: View {
     var body: some View {
         PullDown(symbol: "ellipsis", color: .tertiaryLabelColor, size: 12, spoken: "History, Cameras, Drives, Settings, updates, feedback and Quit",
-                 entries: Windows.shared.bar?.entries ?? [])
+                 entries: { Windows.shared.bar?.entries ?? [] })
             .frame(width: 22, height: 20)
     }
 }

@@ -151,11 +151,10 @@ struct PullDown: NSViewRepresentable {
     var color: NSColor = .secondaryLabelColor
     var size: CGFloat = 12.5
     var spoken: String
-    var entries: [Entry]
+    var entries: @MainActor () -> [Entry]       // read on each press: what's in a menu can change with nothing here looking at it
 
     func makeNSView(context: Context) -> PullDownButton {
         let b = PullDownButton(frame: .zero)
-        b.setContentHuggingPriority(.required, for: .horizontal)
         b.setAccessibilityLabel(spoken)
         return b
     }
@@ -166,8 +165,13 @@ struct PullDown: NSViewRepresentable {
                 .withSymbolConfiguration(.init(pointSize: size, weight: .bold))
         }
         b.imagePosition = symbol == nil ? .noImage : .imageOnly
-        b.pullDown = Self.menu(entries)
+        b.entries = entries
         b.contentTintColor = color
+    }
+
+    /// The whole of what it's put in. It has no title, so on its own it would ask for no width at all.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PullDownButton, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: .zero)
     }
 
     static func menu(_ entries: [Entry]) -> NSMenu {
@@ -181,7 +185,7 @@ struct PullDown: NSViewRepresentable {
 /// item at the top of the menu, over the button, so the control appears twice.
 final class PullDownButton: NSButton {
     static let gap: CGFloat = 8      // the menu's rounded edge sits a little above its first row
-    var pullDown: NSMenu?
+    var entries: @MainActor () -> [PullDown.Entry] = { [] }
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, at, view in menu.popUp(positioning: nil, at: at, in: view) }
 
     override init(frame: NSRect) {
@@ -195,11 +199,14 @@ final class PullDownButton: NSButton {
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// A symbol's own insets would leave the button shorter than what it's put in, and a click at the edge of that would miss it.
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
+
     /// Where the menu's top left goes, in this button's coordinates.
     var menuOrigin: NSPoint { NSPoint(x: 0, y: isFlipped ? bounds.maxY + Self.gap : bounds.minY - Self.gap) }
 
     @objc private func open() {
-        if let pullDown { present(pullDown, menuOrigin, self) }
+        present(PullDown.menu(entries()), menuOrigin, self)
     }
 }
 

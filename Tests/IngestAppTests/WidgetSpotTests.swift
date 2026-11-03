@@ -147,12 +147,11 @@ private func open(on screen: WidgetSpot.Screen, item: CGRect) throws -> WidgetSp
 
     @Test func `Pressing it opens that menu, from that button`() {
         let b = PullDownButton(frame: NSRect(x: 0, y: 0, width: 22, height: 20))
-        let menu = PullDown.menu(entries)
-        b.pullDown = menu
+        b.entries = { entries }
         var opened: (NSMenu, NSPoint, NSView)?
         b.present = { opened = ($0, $1, $2) }
         #expect(b.sendAction(b.action, to: b.target))
-        #expect(opened?.0 === menu)
+        #expect(opened?.0.items.map(\.title) == ["History", "", "Quit"])
         #expect(opened?.1 == b.menuOrigin)
         #expect(opened?.2 === b)
     }

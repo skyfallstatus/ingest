@@ -39,10 +39,10 @@ On macOS 14 you can skip all that: Control-click the app and choose **Open**.
 
 When macOS asks if Ingest can read removable volumes, say yes. You'll see this question again after each update for now.
 
-The first time you plug in a drive, Ingest reads how your folders are organised and follows the same pattern.
+The first time you open it, Ingest asks where copies go: a drive you plug in, or a folder on this Mac. It reads how the folders there are organised and follows the same pattern. To change it later, use Change Drive… in setup, or Drives behind the ··· menu.
 
 <p align="center">
-  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 under Match this layout, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, also Photo and Project, and a Use This button under Layout found. It settles on No card, with Plug in a card and Copies go to Field SSD.">
+  <img src="docs/media/setup.png" width="400" alt="A slim piece of the macOS menu bar with a card icon. The widget opens under it and reads a drive called Field SSD, counting 231 folders. It then shows what it learned: 38 shoots found, 33 under Match this layout, the folder pattern Clients, Client, Date Shoot, Footage, Camera, Card, also Photo and Project, the links Change Layout and Change Drive, and a Use This button under Layout found. It settles on No card, with Plug in a card and Copies go to Field SSD.">
 </p>
 
 Can't see the icon? A full menu bar can hide it. Open Ingest from Applications again and the widget appears.
@@ -55,7 +55,7 @@ Ingest only says it when all of this is true:
 - Every file was read back from the drive and read again from the card, and the two match exactly.
 - The card and the drive stayed plugged in the whole time.
 
-If you unplug the card or the drive, Ingest checks everything again when it comes back. That takes about as long as reading the card once.
+If you unplug the card or the drive, Ingest checks everything again when it comes back. That takes about as long as reading the card once. A folder on this Mac works the same way: move, rename or delete it and the proof ends.
 
 If something doesn't match, Ingest tries once more and then tells you which file. A file that fails is never given its real name on your drive, so a bad copy can't pass for a good one.
 
@@ -64,7 +64,7 @@ The full rules are in [docs/SAFETY.md](docs/SAFETY.md).
 ## Good to know
 
 - **It checks the data. It doesn't watch your clips.** A clip that was already broken in camera will copy and match perfectly. For many formats Ingest also checks that clips are complete, but it's still worth opening a few yourself.
-- **One copy is one copy.** Safe means your drive holds what the card held. Drives can still fail later, so keep a backup.
+- **One copy is one copy.** Safe means your drive holds what the card held. Drives can still fail later, so keep a backup. A folder on this Mac is a copy on the Mac itself.
 - **"Have a look"** means Ingest couldn't be completely sure, and the widget says why. Treat the card as not safe yet.
 - **Your cards are never written to.** On your drive, Ingest adds a hidden `.ingest` folder for your setup and its notes, and an `ascmhl` folder beside each card it copies, so other tools can check the copy too.
 
@@ -110,7 +110,7 @@ If you shoot on something marked "Documents only", you'd be a big help: tell us 
 
 </details>
 
-Your working drive can be exFAT, APFS or HFS+. FAT32 works too, up to 4 GB a file.
+Your working drive can be exFAT, APFS or HFS+. FAT32 works too, up to 4 GB a file. It can also be a folder on this Mac, outside Desktop, Documents, Downloads and iCloud. On the Mac's own disk Ingest always leaves 20 GB free, so macOS keeps working: a copy that needs more is refused, and one that runs into it stops.
 
 ## Updates and privacy
 

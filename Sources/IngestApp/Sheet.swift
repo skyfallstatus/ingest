@@ -108,7 +108,10 @@ struct CardSheet: Equatable {
 
     @MainActor static func idle(model: AppModel) -> BottomLine {
         guard let d = model.workingDrive else {
-            if let d = model.drives.first { return BottomLine(kind: .idle, title: "Set up \(d.name)", sentence: "Then plug in a card.", action: .setUp) }
+            if let m = model.missingFolder {
+                return BottomLine(kind: .idle, title: "\(m.name) is missing", sentence: "It was in \(m.place). Choose where copies go.", action: .setUp)
+            }
+            if let d = model.drives.first(where: { !$0.volume.isFolder }) { return BottomLine(kind: .idle, title: "Set up \(d.name)", sentence: "Then plug in a card.", action: .setUp) }
             if let v = model.ignored.first {
                 return BottomLine(kind: .idle, title: "Plug in your working drive", sentence: "\(v.name) can't be one yet: \(model.whyIgnored(v)) See Drives.", action: .setUp)
             }
@@ -307,7 +310,8 @@ struct CardSheet: Equatable {
         }
         if c.isHold { return no("On \(d) and checked. See the warning above.", .look, c.phase == .finished ? .eject : nil) }
         if s.model.workingDrive == nil {
-            return no("\(plural(s.total)) on this card. \(s.model.drives.isEmpty ? "Plug in your working drive." : "Choose a working drive.")")
+            let next = s.model.missingFolder != nil ? "Choose where copies go." : s.model.drives.isEmpty ? "Plug in your working drive." : "Choose a working drive."
+            return no("\(plural(s.total)) on this card. \(next)")
         }
         return no(s.stillToGo, .notDone, s.canName ? .copy(s.total) : nil)     // the form starts a new folder, so that's the whole card
     }
@@ -349,7 +353,8 @@ struct CardSheet: Equatable {
                 line.detail = c.error.map { [$0] } ?? []
                 line.actions = [.dismiss]
             } else if c.read != nil, !s.working {
-                line.detail = [c.error ?? (unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on.")]
+                let missing = s.model.missingFolder.map { "\($0.name) isn't in \($0.place) any more." }
+                line.detail = [c.error ?? missing ?? (unset.isEmpty ? "No working drive. Plug it in to carry on." : "No working drive yet. Choose one to carry on.")]
                 line.actions = unset.map { .useDrive(id: $0.id, name: s.model.label(of: $0)) }
             }
             return line

@@ -271,7 +271,7 @@ import UserNotifications
             if d === workingDrive {
                 for c in cards where c.isBusy {
                     c.control.stop()
-                    if !c.volumeGone { c.error = "\(d.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }    // the card's own warning matters more
+                    if !c.volumeGone { c.error = Self.wentAway(d); c.driveWentAway = true }    // the card's own warning matters more
                 }
             }
             return true
@@ -316,6 +316,7 @@ import UserNotifications
         // The saved drive always wins when it turns up, unless a copy is running.
         if let k = stores.workingDriveKey, workingDrive?.volume.key != k, !isCopying,
            let hit = drives.first(where: { $0.volume.key == k }) {
+            if hit.volume.isFolder { stores.workingFolderPath = hit.path }     // it may have moved, and this is where it is now
             workingDrive = hit; driveChanged(); return
         }
         if workingDrive != nil { return }
@@ -383,6 +384,26 @@ import UserNotifications
             if c.driveWentAway, workingDrive != nil, !c.volumeGone { c.driveWentAway = false; c.error = nil }     // it says why until there's a drive again
             if c.read != nil, !c.volumeGone { Task { await self.matchCard(c) } }
         }
+    }
+
+    /// What a card says when its working drive went during a copy. A folder isn't unplugged.
+    static func wentAway(_ d: DriveState) -> String {
+        d.volume.isFolder ? "\(d.name) was moved or deleted while copying." : "\(d.name) was unplugged. Plug it back in to finish."
+    }
+
+    /// The working folder on this Mac, when it isn't where it was: its name, and the folder it was in.
+    var missingFolder: (name: String, place: String)? {
+        guard workingDrive == nil else { return nil }
+        let path = isDemo ? demoMissingFolder : stores.workingDriveKey?.hasPrefix("folder|") == true ? stores.workingFolderPath : nil
+        guard let path else { return nil }
+        return ((path as NSString).lastPathComponent, ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent)
+    }
+    var demoMissingFolder: String?      // the pictures, which keep away from this Mac's preferences
+
+    /// What to do with no working drive, as a sentence.
+    var noDriveSentence: String {
+        if let m = missingFolder { return "\(m.name) isn't in \(m.place) any more." }
+        return "Plug in your working drive to carry on."
     }
 
     /// Why a volume that's plugged in isn't offered as a drive, for the person looking for it.
@@ -655,7 +676,7 @@ import UserNotifications
 
     func start(_ c: CardSession, destination: Destination, extraFolders: [String] = []) {
         guard !c.isBusy else { return }
-        guard let drive = workingDrive else { c.error = "Plug in your working drive first."; return }
+        guard let drive = workingDrive else { c.error = missingFolder == nil ? "Plug in your working drive first." : noDriveSentence; return }
         guard let read = c.read else { return }
         guard cards.contains(where: { $0 === c }), FileManager.default.fileExists(atPath: c.volume.path) else {
             c.error = "\(c.name) isn't plugged in any more."
@@ -789,8 +810,9 @@ import UserNotifications
         guard let drive = workingDrive, c.provedOn === drive, drive.isCurrent, let read = c.read, let destination = c.pendingDestination else {
             // The saved drive can be back already, and only waiting for the job that was unwinding.
             if workingDrive == nil, !drives.contains(where: { $0.volume.key == stores.workingDriveKey }) {
-                c.error = "Plug in your working drive to carry on."
-                notify(title: "Don't format \(c.name)", body: "Your working drive was unplugged before this card was copied.")
+                c.error = noDriveSentence
+                notify(title: "Don't format \(c.name)", body: missingFolder.map { "\($0.name) was moved or deleted before this card was copied." }
+                    ?? "Your working drive was unplugged before this card was copied.")
             } else if c.driveWentAway { c.driveWentAway = false; c.error = nil }    // it's back, and Resume starts it
             c.phase = .stopped
             queueRunning = false
@@ -849,7 +871,7 @@ import UserNotifications
             c.verdict = done.verdict
             c.existingHome = CardMatcher.existingHome(states: done.states, files: read.listing.files)
             let driveGone = !drive.isCurrent
-            if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
+            if driveGone && c.error == nil { c.error = Self.wentAway(drive); c.driveWentAway = true }
             c.copiedWhole = !out.cancelled && !driveGone && c.filesToGo == 0
             if out.lowSpace, c.error == nil { c.error = Self.lowSpaceStop }
             if out.cancelled || driveGone { c.phase = .stopped }
@@ -857,7 +879,10 @@ import UserNotifications
             else { c.phase = .ready }
             remember(c, job: job, drive: drive, outcome: done.verdict)
             if c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
-            else if driveGone { if !c.volumeGone { notify(title: "Don't format \(c.name)", body: "\(drive.name) was unplugged before every file was proved.") } }
+            else if driveGone {
+                let how = drive.volume.isFolder ? "was moved or deleted" : "was unplugged"
+                if !c.volumeGone { notify(title: "Don't format \(c.name)", body: "\(drive.name) \(how) before every file was proved.") }
+            }
             else if out.lowSpace { notify(title: "Don't format \(c.name)", body: Self.lowSpaceStop) }
             else if !out.cancelled { notify(title: "\(c.name) needs a look", body: "Some files didn't copy. Don't format it.") }
             refreshIndex(drive)
@@ -877,7 +902,7 @@ import UserNotifications
     }
 
     func resume(_ c: CardSession) {
-        guard workingDrive != nil else { c.error = "Plug in your working drive to carry on."; return }
+        guard workingDrive != nil else { c.error = noDriveSentence; return }
         guard let d = c.pendingDestination else { recheck(c); return }     // a check that was stopped, with nothing to copy
         c.error = nil
         start(c, destination: d, extraFolders: c.extraFolders)

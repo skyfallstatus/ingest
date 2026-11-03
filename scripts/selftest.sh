@@ -4,7 +4,9 @@
 # No other volume is opened or written to: macOS's list of volumes is all the app reads about them. The names are unique
 # to this run, a name already mounted stops it, INGEST_ONLY_VOLUMES fences the app in, and only this run's own images are
 # detached. They mount in /Volumes because the app only looks there. The app's preferences aren't fenced in: the test
-# clears its own working drive, camera memory and volume choices, as it always has.
+# clears its own working drive, camera memory and volume choices, as it always has. Saved folders on this Mac are kept in the
+# support folder, which is this run's own, and INGEST_ONLY_FOLDERS fences them in too: the folder pass uses a folder inside
+# this run's folder, with the 64 MB OTHER image as its card, never the sample card.
 set -e
 SAMPLE="${SAMPLE_CARD:?set SAMPLE_CARD to a Sony card folder}"
 W=$(mktemp -d /tmp/ingest-selftest.XXXXXX)
@@ -62,7 +64,9 @@ dd if=/dev/urandom of="$O/A001.braw" bs=1m count=4 2>/dev/null
 hdiutil detach -quiet "$O"
 cd "${0:A:h}/.."
 swift build -j 6 --product IngestApp
+mkdir "$W/Folder drive"
 rc=0
+INGEST_ONLY_FOLDERS="$W/Folder drive" INGEST_SELFTEST_FOLDER="$W/Folder drive" \
 INGEST_ALLOW_DISK_IMAGES=1 INGEST_ONLY_VOLUMES="$DRIVE:$CARD:$OTHER" INGEST_SUPPORT_DIR=$W/support INGEST_SELFTEST_CARD_IMAGE=$W/card.dmg \
   INGEST_SELFTEST_DRIVE_IMAGE=$W/drive.dmg INGEST_SELFTEST_OTHER_IMAGE=$W/other.dmg INGEST_SELFTEST_OTHER_NAME="$OTHER" \
   .build/debug/IngestApp --selftest "$DRIVE" "$CARD" $W/shots || rc=$?

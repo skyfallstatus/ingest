@@ -319,7 +319,7 @@ private struct IdleSheet: View {
     @Environment(PanelUI.self) private var ui
 
     var body: some View {
-        let drive = model.workingDrive ?? model.drives.first
+        let drive = model.workingDrive ?? (model.missingFolder == nil ? model.drives.first { !$0.volume.isFolder } : nil)
         let bottom = CardSheet.idle(model: model)
         VStack(spacing: 0) {
             SheetHead(title: "No card")
@@ -334,7 +334,9 @@ private struct IdleSheet: View {
                 .accessibilityElement(children: .combine)
             } else { Color.clear.frame(height: 8) }
             Foot(bottom: bottom) {
-                if bottom.action == .setUp {
+                if bottom.action == .setUp, model.missingFolder != nil {
+                    Button("Choose…") { ui.setup = SetupRequest(drive: nil) }.buttonStyle(ActionStyle())
+                } else if bottom.action == .setUp {
                     Button("Set Up…") {
                         if let drive, model.workingDrive !== drive { model.use(drive: drive) }
                         ui.setup = SetupRequest(drive: drive)

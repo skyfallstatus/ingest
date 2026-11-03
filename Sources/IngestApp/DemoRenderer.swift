@@ -265,6 +265,16 @@ import SwiftUI
             c.error = "Field SSD was unplugged. Plug it back in to finish."
             return c
         }
+        state("not-enough-room-on-this-mac") {
+            let c = draft(card(phase: .ready), client: "Lantern Bakery Co.", shoot: "Spring menu")
+            c.error = "Not enough room on this Mac: this needs 214.9 GB and 180.2 GB is free. 20 GB is kept free for macOS."
+            return c
+        }
+        state("stopped-for-room") {
+            let c = named(card(verified: 52, phase: .ready))
+            c.error = AppModel.lowSpaceStop
+            return c
+        }
         state("not-enough-room") {
             let c = draft(card(phase: .ready), client: "Lantern Bakery Co.", shoot: "Spring menu")
             c.error = "Not enough room: this needs 61.5 GB and only 40.2 GB is free."
@@ -322,6 +332,19 @@ import SwiftUI
         model.workingDrive = unset
         state("drive-not-set-up") { let c = card(phase: .ready); c.verdict = .notSafe(remaining: 148, total: 148, reasons: []); return c }
         both("idle-not-set-up") {}
+        // The working folder on this Mac, gone from where it was
+        model.drives = []
+        model.workingDrive = nil
+        model.demoMissingFolder = NSHomeDirectory() + "/Movies/Footage"
+        both("idle-folder-missing") {}
+        state("folder-missing") { let c = card(phase: .ready); c.verdict = .notSafe(remaining: 148, total: 148, reasons: []); return c }
+        state("folder-moved-while-copying") {
+            let c = named(card(verified: 52, phase: .stopped))
+            c.error = "Footage was moved or deleted while copying."
+            c.driveWentAway = true
+            return c
+        }
+        model.demoMissingFolder = nil
         model.drives = [d]
         model.workingDrive = working
 

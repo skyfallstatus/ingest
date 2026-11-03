@@ -595,6 +595,44 @@ import SwiftUI
         check("cameras: a renamed folder is saved", Stores().cameras["selftest"]?.folder == "B Cam")
         model.forgetCamera("selftest")
         check("cameras: forgetting one forgets it", Stores().cameras["selftest"] == nil && model.cameraMemory["selftest"] == nil)
+
+        await folderPass(otherName: otherName, model: model)
+    }
+
+    /// A folder on this Mac as the drive: inside this run's own folder, with the small test image as the card. Never the sample card.
+    private static func folderPass(otherName: String, model: AppModel) async {
+        guard let path = ProcessInfo.processInfo.environment["INGEST_SELFTEST_FOLDER"], FileManager.default.fileExists(atPath: path),
+              let card = model.cards.first(where: { $0.volume.name == otherName }) else {
+            check("folder: the script names this run's folder, and the small card is in", false)
+            return
+        }
+        _ = await until(60, "settled") { !model.isCopying && !card.isMatching }
+        let picked = await model.pick(folder: path)
+        guard let folder = picked.drive else { check("folder: it can be picked", false, picked.problem ?? ""); return }
+        check("folder: picked, it's a drive on this Mac", folder.volume.isFolder && folder.volume.isInternal)
+        check("folder: picking saves nothing", model.workingDrive !== folder && Stores().folderBookmarks.isEmpty)
+        let setup = ShootPlanner.presets()[0].setup
+        check("folder: Use This saves it", model.accept(setup: setup, for: folder) == nil && model.workingDrive === folder && Stores().folderBookmarks.count == 1)
+        check("folder: its setup is inside it", FileManager.default.fileExists(atPath: path + "/.ingest/setup.json"))
+        _ = await until(60, "ready") { card.phase == .ready && !card.isMatching }
+        model.start(card, destination: Destination(footageRoot: "Folder pass"))
+        check("folder: the small card copies and goes to Safe", await until(120, "safe") { card.isSafe(on: folder) }, "\(card.phase) \(card.error ?? "")")
+
+        // Moved away, it's missing, and nothing about it is Safe. Put back, it's read again before it can be.
+        let aside = path + " moved"
+        guard (try? FileManager.default.moveItem(atPath: path, toPath: aside)) != nil else { check("folder: it can be moved", false); return }
+        check("folder: moved, it's no longer the drive", await until(20, "gone") { model.workingDrive == nil } && !card.isSafe(on: folder))
+        check("folder: and the card says where it was", CardSheet.make(card, model: model).line(.drive)?.detail.first == "\(folder.name) isn't in \(folder.volume.parentName) any more.",
+              "\(CardSheet.make(card, model: model).line(.drive)?.detail ?? [])")
+        guard (try? FileManager.default.moveItem(atPath: aside, toPath: path)) != nil else { check("folder: it can be put back", false); return }
+        check("folder: put back, it's the drive again", await until(20, "back") { model.workingDrive?.volume.key == folder.volume.key })
+        check("folder: but a new one, whose proof starts again", model.workingDrive !== folder && !card.isSafe(on: model.workingDrive))
+        check("folder: read again, it goes to Safe", await until(120, "safe") { card.isSafe(on: model.workingDrive) }, "\(card.phase)")
+
+        // Remove forgets it, and deletes nothing
+        if let d = model.workingDrive { model.forget(folder: d) }
+        check("folder: Remove forgets it", await until(20, "forgotten") { model.workingDrive == nil && !model.drives.contains { $0.volume.isFolder } } && Stores().folderBookmarks.isEmpty)
+        check("folder: and leaves what's in it", FileManager.default.fileExists(atPath: path + "/Folder pass"))
     }
 
     private final class Expectation { var done = false }

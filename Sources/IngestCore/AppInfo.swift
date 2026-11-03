@@ -4,7 +4,7 @@ import Foundation
 public enum AppInfo {
     public static let name = "Ingest"
     public static let bundleID = "com.skyfallstatus.ingest"
-    public static let version = "0.1"
+    public static let version = "0.2"
     /// Which build this is, so a report can say. `scripts/build-app.sh` writes it into the bundle.
     public static var fullVersion: String {
         guard let build = Bundle.main.object(forInfoDictionaryKey: "IngestBuild") as? String else { return version }

@@ -8,7 +8,7 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 
 1. **One place decides.** `Verdict.evaluate` is the only code that can say a card is safe. Nothing else may produce or imitate that result.
 2. **Green needs all of it.** The listing finished with no errors, every listed file opened, every file was proved identical by reading both sides, nothing is a blocker, and the card still lists exactly what was proved.
-3. **Green is about this drive.** A proof belongs to one mount of one drive. Change the working drive, or unplug it, and it's gone. Another drive at the same path is another drive, even with the same name and UUID. No drive means no green.
+3. **Green is about this drive.** A proof belongs to one mount of one drive. Change the working drive, or unplug it, and it's gone. Another drive at the same path is another drive, even with the same name and UUID. No drive means no green. A mount is held by a descriptor that an unmount revokes, and its path has to lead to the very folder that descriptor was opened on, same device and inode, with no delete, rename or revoke of it on the kernel's record in between. Once a mount has ended it stays ended.
 4. **The last look is real.** Before green, every file on the drive must still be the file that was proved: same mount, same file, same size, same modified time. The card must be listed and fingerprinted again and match, modified times included, and any device log is read again after the full reads that can add to it.
 5. **Doubt is never green.** A blocker stops the verdict. A hold means "Have a look". Only a note leaves a card green. A rule that can't reach a conclusion must not read as a pass.
 6. **An unreadable volume isn't an empty one.** A denied permission or a failed listing is never "empty" and never "safe".
@@ -37,6 +37,7 @@ These rules hold for every change. Speed, tidiness and new features all come sec
 
 24. **Every path stays on the drive.** Paths from a saved setup, a ledger, an index or a person are refused if they're absolute, hold `.` or `..`, or lead into the app's own folder. Everything on the drive is reached with no symbolic link on the way, on the drive's own volume, and a file that turns out to be the card's own file is never a copy of it.
 25. **A job belongs to its drive.** The working drive can't change under a running or queued job, and everything known about a card is dropped before another drive is looked at.
+27. **The Mac keeps room to work.** A copy to the Mac's own disk, or to any internal volume, leaves 20 GB free for macOS, whatever it's copying. Free space is what `statfs` gives anyone (`f_bavail`), which leaves out what macOS could purge, and the panel shows that same figure. A job is refused before it starts unless what it needs, its margin and the 20 GB all fit. Each file is checked again before it's copied, and the copy itself asks before every chunk it writes. A copy that would go under stops: its temp file in `.ingest/tmp` is removed, it isn't tried again, and the job ends saying so. A drive that plugs in keeps the 256 MB margin it always had. The Mac filled its own disk during a test on 2026-11-02 and stopped working, and the owner made this a rule on 2026-11-03.
 
 ## Honesty
 

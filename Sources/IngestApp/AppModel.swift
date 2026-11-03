@@ -689,6 +689,7 @@ import UserNotifications
         var job = Pipeline.makeJob(read: read, states: c.states, proved: c.proved, cardName: c.name, driveRoot: drive.path, camera: c.primaryCamera?.identity,
                                    destination: destination, probe: c.probe, index: drive.index)
         job.dirsToCreate = extraFolders + job.dirsToCreate
+        job.reserve = drive.volume.isInternal ? IngestEngine.macFloor : 0     // the Mac's own disk always keeps room for macOS
         return job
     }
 
@@ -797,12 +798,14 @@ import UserNotifications
             let driveGone = !drive.isCurrent
             if driveGone && c.error == nil { c.error = "\(drive.name) was unplugged. Plug it back in to finish."; c.driveWentAway = true }
             c.copiedWhole = !out.cancelled && !driveGone && c.filesToGo == 0
+            if out.lowSpace, c.error == nil { c.error = Self.lowSpaceStop }
             if out.cancelled || driveGone { c.phase = .stopped }
             else if c.isSafe || c.isHold { c.phase = .finished }
             else { c.phase = .ready }
             remember(c, job: job, drive: drive, outcome: done.verdict)
             if c.isSafe(on: drive) || c.isHold { announce(c, drive: drive) }
             else if driveGone { if !c.volumeGone { notify(title: "Don't format \(c.name)", body: "\(drive.name) was unplugged before every file was proved.") } }
+            else if out.lowSpace { notify(title: "Don't format \(c.name)", body: Self.lowSpaceStop) }
             else if !out.cancelled { notify(title: "\(c.name) needs a look", body: "Some files didn't copy. Don't format it.") }
             refreshIndex(drive)
         }
@@ -812,6 +815,8 @@ import UserNotifications
         if let w = workingDrive, c.provedOn !== w { driveChanged() }
         pumpQueue()
     }
+
+    static let lowSpaceStop = "Stopped with \(ByteFormat.round(IngestEngine.macFloor)) left so the Mac keeps working."
 
     func stop(_ c: CardSession) {
         if c.phase == .queued { queue.removeAll { $0 === c }; c.phase = .ready }

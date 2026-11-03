@@ -17,6 +17,7 @@ public struct IngestJob: Sendable {
     public var dirsToCreate: [String]       // drive-relative, including the card's own empty folders
     public var items: [IngestItem]          // only the files that still need copying
     public var cardMount: MountAnchor?      // the mount the card was read from
+    public var reserve: UInt64 = 0          // free space the drive's volume keeps whatever happens. The Mac's own disk keeps `IngestEngine.macFloor`.
 }
 
 public struct IngestProgress: Sendable {
@@ -39,6 +40,7 @@ public struct IngestOutcome: Sendable {
     public var proofs: [String: Proof]  // what `states` calls verified, tied to the files and mounts it read
     public var cancelled: Bool
     public var weakVerification: Bool   // the drive wouldn't confirm a flush, a cache couldn't be bypassed, or earlier work is still in doubt
+    public var lowSpace = false         // stopped before the volume went under the job's reserve
     public var failures: [String] { states.compactMap { if case .failed = $0.value { $0.key } else { nil } } }
 }
 
@@ -72,12 +74,28 @@ public final class IngestControl: @unchecked Sendable {
 }
 
 public enum IngestEngine {
+    /// What a copy to the Mac's own disk always leaves free, so macOS keeps working. A full startup disk stops the Mac.
+    public static let macFloor: UInt64 = 20_000_000_000
+
+    /// Free bytes on the volume holding `path`, as statfs counts them for anyone: purgeable space isn't counted. The panel
+    /// shows this same figure. Nil if it can't say.
+    public static func freeBytes(at path: String) -> UInt64? {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return nil }
+        return UInt64(fs.f_bavail) * UInt64(fs.f_bsize)
+    }
+
+    static func hasRoom(_ bytes: UInt64, keeping reserve: UInt64, on path: String) -> Bool {
+        guard let free = freeBytes(at: path), free >= reserve else { return false }
+        return free - reserve >= bytes
+    }
+
     /// Space check first, so a job never starts that can't finish.
     /// With `ledger`, what a dead job left in `.ingest/tmp` counts as free: the job will clear it, if it's allowed to start.
     public static func preflight(job: IngestJob, ledger: Ledger? = nil) throws {
-        // A card can't be copied onto itself, by any name.
+        // A card can't be copied onto itself, by any name, or into a folder that holds it.
         let drive = ResolvedRoot(job.driveRoot)?.path ?? job.driveRoot, card = ResolvedRoot(job.cardRoot)?.path ?? job.cardRoot
-        if drive == card || drive.hasPrefix(card + "/") { throw IngestError.sameVolume }
+        if drive == card || drive.hasPrefix(card + "/") || card.hasPrefix(drive + "/") { throw IngestError.sameVolume }
         // Every path here came from somewhere that isn't this engine: a saved setup, a drive's index, a person.
         for rel in [job.destination] + job.dirsToCreate + job.items.map(\.drivePath) where !Ledger.isInsideDrive(rel) {
             throw IngestError.outsideDrive(rel)
@@ -95,7 +113,9 @@ public enum IngestEngine {
             }
         }
         let margin: UInt64 = 256 * 1024 * 1024 + UInt64(job.items.count) * 256 * 1024  // ledger, manifests, cluster slack
-        if need + margin > free { throw IngestError.notEnoughSpace(needed: need + margin, free: free) }
+        if job.reserve > 0 {
+            if free < job.reserve || free - job.reserve < need + margin { throw IngestError.notEnoughRoomOnMac(needed: need + margin, free: free, kept: job.reserve) }
+        } else if need + margin > free { throw IngestError.notEnoughSpace(needed: need + margin, free: free) }
         let type = withUnsafeBytes(of: fs.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
         if type == "msdos" || type == "fat32", let big = job.items.first(where: { $0.file.size >= 1 << 32 }) {
             throw IngestError.fileTooLarge(big.file.name)
@@ -113,6 +133,7 @@ public enum IngestEngine {
         journal.fault = hooks.journalFails
 
         var made = Set<String>()
+        var lowSpace = false
         try makeDir(tempFolder, root: root, made: &made)
         sweep(root: root, ledger: ledger, wanted: Set(job.items.map(\.drivePath)))
         for d in job.dirsToCreate { try makeDir(d, root: root, made: &made) }
@@ -161,7 +182,7 @@ public enum IngestEngine {
         let before = Dictionary(there.compactMap { p in root.stamp(p).map { (p, $0) } }, uniquingKeysWith: { a, _ in a })
         let first = there.isEmpty ? (confirmed: false, refused: false) : askToFlush(root, hooks)
 
-        for (i, item) in job.items.enumerated() {
+        files: for (i, item) in job.items.enumerated() {
             if control.isStopped { break }
             report(.copying, i, item.file.name)
             let src = card.file(item.file.relPath)
@@ -200,12 +221,15 @@ public enum IngestEngine {
             }
 
             guard listed else { states[item.file.relPath] = .failed("couldn't record this copy on the drive"); continue }     // a name goes on the list first
+            // Room for this whole file and the reserve, or the job stops here. The copy asks again as it goes.
+            if job.reserve > 0, !hasRoom(item.file.size, keeping: job.reserve, on: root.path) { lowSpace = true; break }
             let temp = root.file(tempFolder) + "/" + job.id + "." + String(i) + ".part"
-            let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, journal: journal, control: control, hooks: hooks,
+            let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, reserve: job.reserve, journal: journal, control: control, hooks: hooks,
                                       checking: { report(.checking, i, item.file.name) },
                                       markWeak: { hash, bytes in (try? journal.record(entry(item, hash: hash, bytes: bytes, weak: true))) != nil })
             switch result {
             case .stopped: break
+            case .lowSpace: lowSpace = true; break files
             case .failed(let why): states[item.file.relPath] = .failed(why)
             case .proved(let hash, let bytes, let thisWeak): accept(item, hash: hash, bytes: bytes, stamp: root.stamp(item.drivePath), weak: thisWeak)
             }
@@ -216,21 +240,23 @@ public enum IngestEngine {
         for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
         // Strong status has to be earned here. A job the drive refuses is weak for good, and one that can't seal reads as cut off.
         if !journal.seal(recorded, flushVolume: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
-        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak)
+        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak, lowSpace: lowSpace)
     }
 
-    private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped }
+    private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped, lowSpace }
 
     /// Up to two attempts. A file only takes its real name once the copy, the drive and a second read of the card agree.
-    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, journal: LedgerJournal, control: IngestControl,
+    /// A copy that would take the volume under `reserve` is stopped where it is, its temp removed, and not tried again.
+    private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, reserve: UInt64, journal: LedgerJournal, control: IngestControl,
                                      hooks: FaultHooks, checking: () -> Void, markWeak: (UInt64, UInt64) -> Bool) -> CopyResult {
         var lastError = "copy failed"
         for attempt in 1 ... 2 where !control.isStopped {
             let copiedBefore = ci_load_u64(control.copied), checkedBefore = ci_load_u64(control.checked)
             func rewind() { ci_store_u64(control.copied, copiedBefore); ci_store_u64(control.checked, checkedBefore) }
             unlink(temp)
-            let copy = ci_copy(src, temp, item.file.size, control.cancelFlag, control.copied)
+            let copy = ci_copy(src, temp, item.file.size, reserve, control.cancelFlag, control.copied)
             if copy.stage == Int32(CI_STAGE_CANCELLED) { discard(temp); break }
+            if copy.stage == Int32(CI_STAGE_LOW_SPACE) { discard(temp); rewind(); return .lowSpace }
             if copy.stage != 0 {
                 lastError = describe(copy, "copying")
                 discard(temp)

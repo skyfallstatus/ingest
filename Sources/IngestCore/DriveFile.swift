@@ -11,25 +11,31 @@ public struct DriveStamp: Hashable, Sendable {
     init(_ s: ci_stamp) { device = s.dev; inode = s.size == 0 ? 0 : s.ino; size = s.size; mtime = s.mtime; mtimeNanos = s.mtime_ns }
 }
 
-/// One mount of one volume. An unmount kills it for good, even if the same volume comes back at the same path, and
-/// that's what a proof hangs on: UUIDs repeat on cloned media, and events can be missed, but this can't be.
+/// One mount of one volume, or one folder on one. An unmount kills it for good, even if the same volume comes back at the
+/// same path, and that's what a proof hangs on: UUIDs repeat on cloned media, and events can be missed, but this can't be.
+/// The path has to lead to the very folder it was opened on too, so a folder moved, renamed, deleted or replaced ends it,
+/// and once it has ended it stays ended, whatever turns up at the path later.
 /// It doesn't hold the volume: an eject goes straight past it.
 public final class MountAnchor: Hashable, @unchecked Sendable {
     public let path: String
     private let fd: Int32
+    private let events: Int32      // what has happened to that folder since, kept by the kernel whether anyone looked or not
     private let lock = NSLock()
     private var retired = false
 
     public init?(path: String) {
         fd = ci_mount_open(path)
         guard fd >= 0 else { return nil }
+        events = ci_watch_open(fd)
+        guard events >= 0 else { close(fd); return nil }
         self.path = path
     }
-    deinit { close(fd) }
+    deinit { close(events); close(fd) }
 
     public var isCurrent: Bool {
         lock.lock(); defer { lock.unlock() }
-        return !retired && ci_mount_alive(fd) != 0
+        if !retired && (ci_watch_fired(events) != 0 || ci_mount_alive(fd, path) == 0) { retired = true }
+        return !retired
     }
     /// As an unmount would. For tests, which can't unmount a folder.
     func retire() { lock.lock(); retired = true; lock.unlock() }

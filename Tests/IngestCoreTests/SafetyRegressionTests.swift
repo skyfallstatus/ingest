@@ -368,6 +368,25 @@ private func editMiddle(_ path: String) {
     #expect(verdict(read, out, drive) != .safe)
 }
 
+// A folder on the Mac can be a drive, and a folder can be moved, renamed or swapped without anything being unmounted.
+// Its proof ends with it, and stays ended when the folder is put back: nothing shows what happened to it while it was away.
+@Test(arguments: ["moved", "renamed", "replaced"]) func aProofEndsWhenItsFolderIsMovedRenamedOrReplaced(how: String) throws {
+    let (_, drive, read, _, out) = try provedCard(size: 100_000)
+    let aside = (drive as NSString).deletingLastPathComponent + "/" + UUID().uuidString
+    switch how {
+    case "moved": try fm.createDirectory(atPath: aside, withIntermediateDirectories: true); try fm.moveItem(atPath: drive, toPath: aside + "/in")
+    case "renamed": try fm.moveItem(atPath: drive, toPath: aside)
+    default:    // the same files, in a new folder at the same place
+        try fm.copyItem(atPath: drive, toPath: aside)
+        try fm.removeItem(atPath: drive)
+        try fm.moveItem(atPath: aside, toPath: drive)
+    }
+    #expect(verdict(read, out, drive) != .safe)
+    if how != "replaced" { try fm.moveItem(atPath: how == "moved" ? aside + "/in" : aside, toPath: drive) }
+    #expect(fm.fileExists(atPath: drive + "/S/C0001.MP4"))
+    #expect(verdict(read, out, drive) != .safe, "back where it was, and still not proved")
+}
+
 @Test func aMissingOrForgedProofIsNoProof() throws {
     let (_, drive, read, ledger, out) = try provedCard()
     #expect(Pipeline.conclude(read: read, states: out.states, proved: [:], issues: [], driveRoot: drive, kind: kind).verdict != .safe)

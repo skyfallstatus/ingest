@@ -209,6 +209,22 @@ struct DiskImageTests {
         #expect(states["C0001.MP4"] == .likely(drivePath: "S/C0001.MP4"), "known at once, and read again before it counts")
     }
 
+    /// The copy itself asks for room before each chunk, and a real volume answers. 10 MiB at most is written, onto this image.
+    @Test func `A copy stops before it takes a real volume under what it has to keep`() throws {
+        let image = try Image(megabytes: 64)
+        guard imageMounted(at: image.root) == image.dmg else { throw NotItsOwnImage(description: "\(image.root) isn't this test's image") }
+        let src = temp() + "/in.bin", dst = image.root + "/out.bin"
+        put(src, rnd(10 << 20))
+        let before = try #require(IngestEngine.freeBytes(at: image.root))
+        guard before > 20 << 20 else { throw NotItsOwnImage(description: "the image has \(before) bytes free") }
+        let keep = before - (9 << 20)     // room for one 8 MiB chunk, not for the whole file
+        let r = ci_copy(src, dst, 10 << 20, keep, nil, nil)
+        #expect(r.stage == Int32(CI_STAGE_LOW_SPACE))
+        #expect(r.bytes < 10 << 20)
+        unlink(dst)
+        #expect((IngestEngine.freeBytes(at: image.root) ?? 0) >= keep)
+    }
+
     @Test func `A whole job on exFAT finishes clean, in the app's own folder`() throws {
         let card = temp(), image = try Image(), drive = image.root
         for i in 0..<5 { put(card + "/CLIP/\(i).MP4", rnd(600_000)) }

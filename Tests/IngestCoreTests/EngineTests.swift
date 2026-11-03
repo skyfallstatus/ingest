@@ -352,6 +352,53 @@ private func flipByte(_ path: String) {
     #expect(throws: IngestError.self) { try IngestEngine.preflight(job: job) }
 }
 
+// MARK: Room left for the Mac
+
+private let fm = FileManager.default
+
+@Test func aJobThatWouldEatTheReserveIsRefusedBeforeWritingAnything() throws {
+    let card = temp(), drive = temp()
+    put(card + "/C0001.MP4", rnd(100_000))
+    var job = makeJob(CardReader.read(root: card) { _ in .video }, drive: drive, dest: "S")
+    job.reserve = 1 << 62       // more than any disk has: the real free space is read, and it isn't enough
+    #expect(throws: IngestError.self) { try IngestEngine.preflight(job: job) }
+    do { try IngestEngine.preflight(job: job) } catch let e as IngestError {
+        guard case .notEnoughRoomOnMac(_, _, let kept) = e else { Issue.record("\(e)"); return }
+        #expect(kept == 1 << 62)
+    }
+    #expect(throws: IngestError.self) { _ = try IngestEngine.run(job: job, ledger: Ledger(driveRoot: drive), control: IngestControl()) { _ in } }
+    #expect(try fm.contentsOfDirectory(atPath: drive).isEmpty, "nothing was written")
+}
+
+@Test func theMacsRefusalSaysWhatsKept() {
+    let e = IngestError.notEnoughRoomOnMac(needed: 214_900_000_000, free: 180_200_000_000, kept: IngestEngine.macFloor)
+    #expect(e.localizedDescription == "Not enough room on this Mac: this needs 214.9 GB and 180.2 GB is free. 20 GB is kept free for macOS.")
+}
+
+@Test func aCopyThatRunsIntoTheReserveStopsAndLeavesNothingHalfDone() throws {
+    let card = temp(), drive = temp()
+    for i in 1...3 { put(card + "/C000\(i).MP4", rnd(1_000_000)) }
+    let read = CardReader.read(root: card) { _ in .video }
+    var job = makeJob(read, drive: drive, dest: "S")
+    job.reserve = 1     // so only the faked free space below can stop it
+    let out = try withFaults {
+        defer { ci_set_free_fault(-1) }
+        // Once the first file is down, the volume reads as full while the next one is being copied.
+        let hooks = FaultHooks(afterCopy: { _, _, _ in ci_set_free_fault(0) })
+        return try IngestEngine.run(job: job, ledger: Ledger(driveRoot: drive), control: IngestControl(), hooks: hooks) { _ in }
+    }
+    #expect(out.lowSpace)
+    #expect(!out.cancelled)
+    let first = job.items[0].file.relPath, stopped = job.items[1].file.relPath, never = job.items[2].file.relPath
+    #expect(fm.fileExists(atPath: drive + "/S/" + first), "the file before it is proved and in place")
+    #expect(!fm.fileExists(atPath: drive + "/S/" + stopped), "its real name was never taken")
+    #expect(!fm.fileExists(atPath: drive + "/S/" + never), "and nothing after it was tried")
+    #expect(tempFiles(on: drive).isEmpty)
+    #expect(Array(out.states.keys) == [first])
+    let v = Pipeline.conclude(read: read, states: out.states, proved: out.proofs, issues: [], driveRoot: drive) { _ in .video }.verdict
+    #expect(v != .safe)
+}
+
 // MARK: Manifest
 
 @Test func c4MatchesSpecShape() {
@@ -413,7 +460,7 @@ private let boundaries: [Int] = [0, 1, 4095, 1 << 20, (2 << 20) - 1, 2 << 20, (2
     let data = rnd(size)
     put(src, data)
     let control = IngestControl()
-    let r = ci_copy(src, dst, UInt64(size), nil, control.copied)
+    let r = ci_copy(src, dst, UInt64(size), 0, nil, control.copied)
     #expect(r.stage == 0 && r.err == 0)
     #expect(r.bytes == UInt64(size))
     #expect(r.hash == data.withUnsafeBytes { ci_xxh64_oneshot($0.baseAddress, size, 0) })
@@ -435,7 +482,7 @@ private let boundaries: [Int] = [0, 1, 4095, 1 << 20, (2 << 20) - 1, 2 << 20, (2
     let control = IngestControl()
     control.stop()
     #expect(ci_hash_uncached(src, control.cancelFlag, nil, nil).stage == Int32(CI_STAGE_CANCELLED))
-    #expect(ci_copy(src, dst, 40 << 20, control.cancelFlag, nil).stage == Int32(CI_STAGE_CANCELLED))
+    #expect(ci_copy(src, dst, 40 << 20, 0, control.cancelFlag, nil).stage == Int32(CI_STAGE_CANCELLED))
 }
 
 @Test func aFailedReadIsNeverAHash() {

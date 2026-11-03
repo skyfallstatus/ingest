@@ -38,13 +38,16 @@ typedef struct {
 } ci_result;
 
 enum { CI_STAGE_OK = 0, CI_STAGE_OPEN_SRC = 1, CI_STAGE_READ = 2, CI_STAGE_OPEN_DST = 3,
-       CI_STAGE_WRITE = 4, CI_STAGE_FLUSH = 5, CI_STAGE_CANCELLED = 7 };
+       CI_STAGE_WRITE = 4, CI_STAGE_FLUSH = 5, CI_STAGE_CANCELLED = 7, CI_STAGE_LOW_SPACE = 8 };
 
 // Copies src to dst (dst must not exist; O_EXCL), hashing the bytes as read from the source.
 // 8 MiB page-aligned chunks with two reads in flight, F_NOCACHE both ends,
 // F_PREALLOCATE then ftruncate (best effort), F_FULLFSYNC before returning.
 // `progress` is incremented by bytes written. `cancel` is polled between chunks.
-ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint,
+// With `keep_free` above 0, the free space on dst's volume is asked before each chunk is written, and the copy stops with
+// CI_STAGE_LOW_SPACE instead of writing a chunk that would leave less than `keep_free`. What was written stays at dst
+// for the caller to remove.
+ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint, uint64_t keep_free,
                   void *cancel, void *progress);
 
 // Reads a whole file from the device, not the cache: maps it, msync(MS_INVALIDATE), unmaps,
@@ -95,8 +98,13 @@ int ci_stamp_file(const char *path, ci_stamp *out);
 int ci_plain_dir(const char *path);
 // A descriptor on `path` that doesn't hold the volume mounted and dies when it's unmounted. -1 on failure.
 int ci_mount_open(const char *path);
-// 1 while that descriptor's volume is still mounted, and it's still the same mount.
-int ci_mount_alive(int fd);
+// 1 while that descriptor's volume is still mounted, it's still the same mount, and `path` still leads to the very folder
+// it was opened on: not moved, renamed, deleted or replaced.
+int ci_mount_alive(int fd, const char *path);
+// A kqueue watching that descriptor's folder for a delete, a rename or a revoke. -1 on failure.
+int ci_watch_open(int fd);
+// 1 once any of those has happened, or if the queue can't say. Never waits.
+int ci_watch_fired(int kq);
 // F_FULLFSYNC on a directory.
 int ci_fsync_dir(const char *dir);
 // sync_volume_np(path, FULLSYNC|WAIT).
@@ -108,6 +116,8 @@ int ci_set_times(const char *path, int64_t seconds, int64_t nanos);
 // A path holding `no_map` can't have its cache cleared. A folder holding `bad_dir` fails part way through a listing.
 // `reserving` runs just before ci_rename_reserved takes a name, with `done` 0, and just after, with `done` 1.
 void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserving)(const char *to, int done));
+// From now on, ci_copy's space check reads `bytes` free, whatever the volume says. -1 puts it back.
+void ci_set_free_fault(int64_t bytes);
 
 // Swift can't touch C11 atomics directly.
 typedef struct { _Atomic int v; } atomic_int_shim;

@@ -102,8 +102,10 @@ case "ingest":
     for (k, v) in confirmed.states { states[k] = v }
     let focus = Set(read.listing.files.map(\.relPath).filter { if case .verified? = states[$0] { false } else { true } })
     let probe = CardProber.probe(root: URL(fileURLWithPath: root), files: read.listing.files, focus: focus)
-    let job = Pipeline.makeJob(read: read, states: states, proved: confirmed.proofs, cardName: (root as NSString).lastPathComponent, driveRoot: drive,
+    var job = Pipeline.makeJob(read: read, states: states, proved: confirmed.proofs, cardName: (root as NSString).lastPathComponent, driveRoot: drive,
                                camera: probe.cameras.first?.identity, destination: Destination(footageRoot: dest), probe: probe, index: index)
+    // The Mac's own disk keeps room for macOS, as in the app. A volume that won't say counts as the Mac's.
+    if (try? URL(fileURLWithPath: drive).resourceValues(forKeys: [.volumeIsInternalKey]))?.volumeIsInternal ?? true { job.reserve = IngestEngine.macFloor }
     let out: IngestOutcome
     do {
         out = try IngestEngine.run(job: job, ledger: ledger, control: control) { _ in }

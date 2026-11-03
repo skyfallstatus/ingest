@@ -10,4 +10,9 @@ public enum ByteFormat {
         if v < 1_000_000_000_000 { return String(format: "%.1f GB", v / 1_000_000_000) }
         return String(format: "%.2f TB", v / 1_000_000_000_000)
     }
+
+    /// "20 GB": a round figure, said as one.
+    public static func round(_ bytes: UInt64) -> String {
+        bytes % 1_000_000_000 == 0 && bytes >= 1_000_000_000 ? "\(bytes / 1_000_000_000) GB" : string(bytes)
+    }
 }

@@ -8,7 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/attr.h>
+#include <sys/event.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/stdio.h>
 #include <unistd.h>
@@ -25,6 +27,20 @@ static void (*_Atomic fault_reserving)(const char *, int);
 
 void ci_set_faults(const char *no_map, const char *bad_dir, void (*reserving)(const char *, int)) {
     fault_no_map = no_map; fault_bad_dir = bad_dir; fault_reserving = reserving;
+}
+
+static _Atomic int64_t fault_free = -1;
+
+void ci_set_free_fault(int64_t bytes) { fault_free = bytes; }
+
+// Free bytes on the volume holding `fd`, as statfs counts them for anyone: f_bavail, which leaves out what macOS could
+// purge. -1 if it can't say.
+static int64_t free_on(int fd) {
+    int64_t fake = fault_free;
+    if (fake >= 0) return fake;
+    struct statfs fs;
+    if (fstatfs(fd, &fs) != 0) return -1;
+    return (int64_t)((uint64_t)fs.f_bavail * (uint64_t)fs.f_bsize);
 }
 
 static ci_result fail(int stage, int err) { ci_result r; memset(&r, 0, sizeof r); r.stage = stage; r.err = err; return r; }
@@ -141,7 +157,7 @@ static void reader_close(reader *g) {
     pthread_cond_destroy(&g->freed);
 }
 
-ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint, void *cancel_, void *progress_) {
+ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint, uint64_t keep_free, void *cancel_, void *progress_) {
     _Atomic int *cancel = cancel_;
     _Atomic uint64_t *progress = progress_;
     int rfd = open(src, O_RDONLY);
@@ -172,6 +188,14 @@ ci_result ci_copy(const char *src, const char *dst, uint64_t size_hint, void *ca
         if (cancel && atomic_load(cancel)) { r.stage = CI_STAGE_CANCELLED; break; }
         chunk *c = next_chunk(&g);
         if (c->err) { r.stage = CI_STAGE_READ; r.err = c->err; break; }
+        if (keep_free > 0) {    // each chunk goes down only if `keep_free` is still free after it. A volume that can't say is full.
+            int64_t left = free_on(wfd);
+            if (left < 0 || (uint64_t)left < keep_free || (uint64_t)left - keep_free < c->len) {
+                r.stage = CI_STAGE_LOW_SPACE;
+                chunk_done(&g, c);
+                break;
+            }
+        }
         ci_xxh64_update(&x, c->data, c->len);
         r.bytes += c->len;
         size_t off = 0;
@@ -449,9 +473,30 @@ int ci_plain_dir(const char *path) {
 // remount of the same card at the same path can't bring it back.
 int ci_mount_open(const char *path) { return open(path, O_EVTONLY); }
 
-int ci_mount_alive(int fd) {
-    struct stat st;
-    return fstat(fd, &st) == 0;
+// A folder can be renamed and renamed back between two looks, so what happened to it in between is kept by the kernel:
+// a queue that records a delete, a rename or a revoke of this very folder the moment it happens.
+int ci_watch_open(int fd) {
+    int kq = kqueue();
+    if (kq < 0) return -1;
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE, 0, NULL);
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) != 0) { close(kq); return -1; }
+    return kq;
+}
+
+int ci_watch_fired(int kq) {
+    struct kevent ev;
+    struct timespec now = { 0, 0 };
+    int n = kevent(kq, NULL, 0, &ev, 1, &now);
+    return n != 0;      // an event, or a queue that can't say
+}
+
+int ci_mount_alive(int fd, const char *path) {
+    struct stat held, now;
+    if (fstat(fd, &held) != 0) return 0;
+    // The descriptor outlives a move, a rename and a delete, so the path has to lead to that same folder too.
+    if (stat(path, &now) != 0) return 0;
+    return held.st_dev == now.st_dev && held.st_ino == now.st_ino;
 }
 
 int ci_fsync_dir(const char *dir) {

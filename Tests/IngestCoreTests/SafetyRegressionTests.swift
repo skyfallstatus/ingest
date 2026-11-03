@@ -387,6 +387,44 @@ private func editMiddle(_ path: String) {
     #expect(verdict(read, out, drive) != .safe, "back where it was, and still not proved")
 }
 
+// Copies went to Work/Footage and Work went to the Trash. Nothing happened to Footage itself, so only a watch on the path
+// above it hears about it, and without that the panel stayed green until something else made it look.
+@Test func aFolderAboveTheDriveMovingIsHeardAtOnce() async throws {
+    let parent = temp(), drive = parent + "/Work/Footage"
+    try fm.createDirectory(atPath: drive, withIntermediateDirectories: true)
+    let anchor = try #require(MountAnchor(path: drive))
+    let heard = Flag()
+    anchor.onEnd { heard.on = true }
+    try await Task.sleep(for: .milliseconds(300))     // FSEvents starts from now, so the move has to come after it's listening
+    try fm.moveItem(atPath: parent + "/Work", toPath: parent + "/Trashed")
+    let end = Date().addingTimeInterval(5)
+    while !heard.on && Date() < end { try await Task.sleep(for: .milliseconds(20)) }
+    #expect(heard.on, "the move above it was heard")
+    #expect(!anchor.isCurrent)
+}
+
+// The folder renamed mid-copy and another Ingest folder of the same name put in its place. Paths are built from the folder's
+// path, so without a look at the mount the next file, and the rename into place, would land in the other folder.
+@Test func aJobStopsWhenItsFolderIsSwappedMidCopy() throws {
+    let card = temp(), drive = temp()
+    for i in 1...3 { put(card + "/C000\(i).MP4", rnd(200_000)) }
+    let read = CardReader.read(root: card, kind: kind)
+    let ledger = Ledger(driveRoot: drive)
+    let aside = (drive as NSString).deletingLastPathComponent + "/" + UUID().uuidString
+    let hooks = FaultHooks(afterCopy: { _, _, attempt in
+        guard attempt == 1, !fm.fileExists(atPath: aside) else { return }
+        try? fm.moveItem(atPath: drive, toPath: aside)
+        for d in [AppInfo.driveFolder + "/tmp", "S"] { try? fm.createDirectory(atPath: drive + "/" + d, withIntermediateDirectories: true) }
+    })
+    let out = try IngestEngine.run(job: makeJob(read, drive: drive, dest: "S"), ledger: ledger, control: IngestControl(), hooks: hooks) { _ in }
+    try #require(fm.fileExists(atPath: aside), "the folder was swapped")
+    #expect(out.driveEnded)
+    let landed = (fm.enumerator(atPath: drive)?.compactMap { $0 as? String } ?? []).filter { $0.hasSuffix(".MP4") || $0.hasSuffix(".part") }
+    #expect(landed.isEmpty, "nothing went into the folder put in its place: \(landed)")
+    #expect(!fm.fileExists(atPath: aside + "/S/C0001.MP4"), "nor did a file take its real name in the old one")
+    #expect(verdict(read, out, drive) != .safe)
+}
+
 @Test func aMissingOrForgedProofIsNoProof() throws {
     let (_, drive, read, ledger, out) = try provedCard()
     #expect(Pipeline.conclude(read: read, states: out.states, proved: [:], issues: [], driveRoot: drive, kind: kind).verdict != .safe)

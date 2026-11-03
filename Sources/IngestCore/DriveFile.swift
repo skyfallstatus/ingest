@@ -1,4 +1,5 @@
 import CIngest
+import CoreServices
 import Foundation
 
 /// A file on the drive as it stood when it was proved: which file on which mounted volume, its size and its modified
@@ -31,10 +32,15 @@ public final class MountAnchor: Hashable, @unchecked Sendable {
         self.path = path
     }
     private var watcher: DispatchSourceFileSystemObject?
-    deinit { watcher?.cancel(); close(events); close(fd) }
+    private var above: FSEventStreamRef?
+    deinit {
+        watcher?.cancel()
+        if let above { FSEventStreamStop(above); FSEventStreamInvalidate(above); FSEventStreamRelease(above) }
+        close(events); close(fd)
+    }
 
-    /// Calls `ended` when the folder is deleted, renamed, moved or revoked, so whoever shows it can look again at once.
-    /// Asking `isCurrent` is still what counts: this only says when to ask.
+    /// Calls `ended` when the folder is deleted, renamed, moved or revoked, or any folder above it is, so whoever shows it can
+    /// look again at once. Asking `isCurrent` is still what counts: this only says when to ask.
     public func onEnd(_ ended: @escaping @Sendable () -> Void) {
         lock.lock(); defer { lock.unlock() }
         guard watcher == nil else { return }
@@ -45,6 +51,32 @@ public final class MountAnchor: Hashable, @unchecked Sendable {
         source.setCancelHandler { close(own) }
         source.resume()
         watcher = source
+        above = Self.watchRoot(path, ended)
+    }
+
+    /// The descriptor only hears about the folder itself. A folder above it dragged to the Trash takes it along with no event
+    /// on it, so FSEvents watches the path to it as well, and says when anything on that path changes.
+    private static func watchRoot(_ path: String, _ ended: @escaping @Sendable () -> Void) -> FSEventStreamRef? {
+        final class Box { let ended: @Sendable () -> Void; init(_ e: @escaping @Sendable () -> Void) { ended = e } }
+        let box = Box(ended)    // the stream keeps its own reference, through `retain`, for as long as it lives
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(box).toOpaque(),
+                                           retain: { p in p.map { _ = Unmanaged<AnyObject>.fromOpaque($0).retain() }; return p },
+                                           release: { p in p.map { Unmanaged<AnyObject>.fromOpaque($0).release() } }, copyDescription: nil)
+        let callback: FSEventStreamCallback = { _, info, count, _, flags, _ in
+            guard let info else { return }
+            for i in 0..<count where flags[i] & FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged) != 0 {
+                Unmanaged<Box>.fromOpaque(info).takeUnretainedValue().ended()
+                return
+            }
+        }
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagNoDefer)
+        let made = withExtendedLifetime(box) {
+            FSEventStreamCreate(nil, callback, &context, [path] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.2, flags)
+        }
+        guard let stream = made else { return nil }
+        FSEventStreamSetDispatchQueue(stream, .global(qos: .utility))
+        guard FSEventStreamStart(stream) else { FSEventStreamInvalidate(stream); FSEventStreamRelease(stream); return nil }
+        return stream
     }
 
     public var isCurrent: Bool {

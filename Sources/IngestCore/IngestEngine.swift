@@ -41,6 +41,7 @@ public struct IngestOutcome: Sendable {
     public var cancelled: Bool
     public var weakVerification: Bool   // the drive wouldn't confirm a flush, a cache couldn't be bypassed, or earlier work is still in doubt
     public var lowSpace = false         // stopped before the volume went under the job's reserve
+    public var driveEnded = false       // stopped because the drive's mount ended: its path may lead somewhere else now
     public var failures: [String] { states.compactMap { if case .failed = $0.value { $0.key } else { nil } } }
 }
 
@@ -182,8 +183,13 @@ public enum IngestEngine {
         let before = Dictionary(there.compactMap { p in root.stamp(p).map { (p, $0) } }, uniquingKeysWith: { a, _ in a })
         let first = there.isEmpty ? (confirmed: false, refused: false) : askToFlush(root, hooks)
 
+        // Paths are built from the drive's path, so once its mount has ended they may lead into another folder put in its place.
+        func driveEnded() -> Bool { ledger.mount?.isCurrent == false }
+        var ended = false
+
         files: for (i, item) in job.items.enumerated() {
             if control.isStopped { break }
+            if driveEnded() { ended = true; break }
             report(.copying, i, item.file.name)
             let src = card.file(item.file.relPath)
             let dst = root.file(item.drivePath)
@@ -225,11 +231,12 @@ public enum IngestEngine {
             if job.reserve > 0, !hasRoom(item.file.size, keeping: job.reserve, on: root.path) { lowSpace = true; break }
             let temp = root.file(tempFolder) + "/" + job.id + "." + String(i) + ".part"
             let result = copyAndProve(item, from: src, to: dst, temp: temp, on: root, reserve: job.reserve, journal: journal, control: control, hooks: hooks,
-                                      checking: { report(.checking, i, item.file.name) },
+                                      checking: { report(.checking, i, item.file.name) }, driveEnded: driveEnded,
                                       markWeak: { hash, bytes in (try? journal.record(entry(item, hash: hash, bytes: bytes, weak: true))) != nil })
             switch result {
             case .stopped: break
             case .lowSpace: lowSpace = true; break files
+            case .driveEnded: ended = true; break files
             case .failed(let why): states[item.file.relPath] = .failed(why)
             case .proved(let hash, let bytes, let thisWeak): accept(item, hash: hash, bytes: bytes, stamp: root.stamp(item.drivePath), weak: thisWeak)
             }
@@ -240,15 +247,15 @@ public enum IngestEngine {
         for d in made.sorted(by: { $0.count > $1.count }) { _ = ci_fsync_dir(root.file(d)) }
         // Strong status has to be earned here. A job the drive refuses is weak for good, and one that can't seal reads as cut off.
         if !journal.seal(recorded, flushVolume: { hooks.syncVolume?(root.path) ?? ci_sync_volume(root.path) }) { weak = true }
-        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak, lowSpace: lowSpace)
+        return IngestOutcome(states: states, proofs: proofs, cancelled: control.isStopped, weakVerification: weak, lowSpace: lowSpace, driveEnded: ended)
     }
 
-    private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped, lowSpace }
+    private enum CopyResult { case proved(hash: UInt64, bytes: UInt64, weak: Bool), failed(String), stopped, lowSpace, driveEnded }
 
     /// Up to two attempts. A file only takes its real name once the copy, the drive and a second read of the card agree.
     /// A copy that would take the volume under `reserve` is stopped where it is, its temp removed, and not tried again.
     private static func copyAndProve(_ item: IngestItem, from src: String, to dst: String, temp: String, on root: ResolvedRoot, reserve: UInt64, journal: LedgerJournal, control: IngestControl,
-                                     hooks: FaultHooks, checking: () -> Void, markWeak: (UInt64, UInt64) -> Bool) -> CopyResult {
+                                     hooks: FaultHooks, checking: () -> Void, driveEnded: () -> Bool, markWeak: (UInt64, UInt64) -> Bool) -> CopyResult {
         var lastError = "copy failed"
         for attempt in 1 ... 2 where !control.isStopped {
             let copiedBefore = ci_load_u64(control.copied), checkedBefore = ci_load_u64(control.checked)
@@ -285,6 +292,8 @@ public enum IngestEngine {
             }
             // Times are metadata: failing to set them never fails a verified copy.
             _ = ci_set_times(temp, item.file.mtime, item.file.mtimeNanos)
+            // The real name is taken by path. If the folder has gone, that path isn't this drive any more.
+            if driveEnded() { discard(temp); return .driveEnded }
             let rc = publish(temp, as: dst, drivePath: item.drivePath, journal: journal)
             if rc != 0 {
                 discard(temp)

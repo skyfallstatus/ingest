@@ -21,10 +21,11 @@ struct SetupHost: View {
                 else { ReadingDrive(drive: drive, close: close) }
             } else { WaitingForDrive(close: close) { pick($0) } }
         }
-        .task(id: drive?.id) { read() }
-        .onChange(of: model.drives.map(\.id)) { _, _ in
+        .task(id: drive.map(ObjectIdentifier.init)) { read() }
+        // By object, not path: another drive can come back at the same mount path in one look.
+        .onChange(of: model.drives.map(ObjectIdentifier.init)) { _, _ in
             if let d = drive, !model.drives.contains(where: { $0 === d }) { drive = nil; learned = nil }
-            else if drive == nil, model.drives.count == 1 { drive = model.drives[0] }
+            if drive == nil, model.drives.count == 1 { drive = model.drives[0] }
         }
         .onAppear { if drive == nil, model.drives.count == 1 { drive = model.drives[0] } }
     }
@@ -249,6 +250,8 @@ struct SetupEditor: View {
     @State private var innerText = ""
     @State private var perCard = false
     @State private var prefix = "CARD "
+    @State private var opened: DriveSetup?
+    @State private var typedBefore = false
 
     init(setup: Binding<DriveSetup>, close: @escaping () -> Void) {
         _target = setup
@@ -333,8 +336,13 @@ struct SetupEditor: View {
             }
         }
         .tint(Color.ink2)
-        .onAppear { load(); ui.editingLayout = true }
-        .onDisappear { ui.editingLayout = false }
+        .onAppear {
+            load()
+            opened = target
+            typedBefore = ui.setup?.typing == true
+            ui.setup?.typing = true
+        }
+        .onDisappear { ui.setup?.typing = typedBefore || target != opened }     // Done kept it, and Use This hasn't saved it yet
     }
 
     private func done() { apply(); close() }
@@ -378,14 +386,6 @@ struct SetupEditor: View {
             if !top.contains(where: { $0.role == .footage }), let i = top.firstIndex(where: { $0.role == .plain }) { top[i].role = .footage }
             setup.inner = top
         }
-        target = Self.edited(setup, from: target)
-    }
-
-    /// A changed layout isn't the one the figures were counted for any more. Nothing changed, nothing to drop.
-    static func edited(_ setup: DriveSetup, from original: DriveSetup) -> DriveSetup {
-        guard !setup.sameLayout(as: original) else { return original }
-        var out = setup
-        out.learned = nil
-        return out
+        target = setup
     }
 }

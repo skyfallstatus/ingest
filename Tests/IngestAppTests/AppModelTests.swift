@@ -1811,16 +1811,6 @@ extension AppModelTests {
         #expect(SetupView.also(setup) == nil)
     }
 
-    @Test func `An edit drops figures counted for the old layout, and only an edit`() {
-        var learned = layout
-        learned.learned = LearnedStats(foldersRead: 9, shootsFound: 8, shootsFollowing: 8, exception: "x")
-        #expect(SetupEditor.edited(learned, from: learned) == learned, "Done with nothing changed")
-        var changed = learned
-        changed.path = [.literal("Elsewhere"), .client]
-        #expect(SetupEditor.edited(changed, from: learned).learned == nil)
-        #expect(SetupEditor.edited(changed, from: learned).path == changed.path)
-    }
-
     @Test func `With no card in, it says where copies go`() async {
         let w = Bench()
         w.plugged.now = [(w.driveA, .drive)]
@@ -1936,21 +1926,60 @@ extension AppModelTests {
         bar.ui.setup = SetupRequest(drive: nil)
         #expect(await !clickElsewhere() && bar.ui.setup == nil, "from Drives or the card foot, it goes")
 
-        bar.ui.setup = SetupRequest(drive: nil)
-        bar.ui.editingLayout = true
+        bar.ui.setup = SetupRequest(drive: nil, typing: true)
         #expect(await clickElsewhere() && bar.ui.setup != nil, "typed folder names are real work")
         bar.hide()
         #expect(!bar.ui.stays)
+        bar.ui.setup = SetupRequest(drive: nil)
+        #expect(!bar.ui.stays, "the next setup starts clean")
     }
 
-    @Test func `The Edit page says it's showing, and stops when it goes`() {
-        let w = Bench(), ui = PanelUI(), showing = Showing()
-        let page = Shown(Toggled(showing: showing, setup: layout), model: w.model, ui: ui)
+    @Test func `The Edit page holds setup while it shows, and after Done only if it changed something`() {
+        let w = Bench(), ui = PanelUI(), showing = Showing(), held = HeldLayout(layout)
+        ui.setup = SetupRequest(drive: nil)
+        let page = Shown(HeldEditor(showing: showing, held: held), model: w.model, ui: ui)
         defer { page.close() }
-        #expect(ui.editingLayout)
+        #expect(ui.stays)
         showing.on = false
         page.settle()
-        #expect(!ui.editingLayout)
+        #expect(!ui.stays, "nothing was changed")
+
+        showing.on = true
+        page.settle()
+        held.setup.path = [.literal("Elsewhere"), .client]
+        showing.on = false
+        page.settle()
+        #expect(ui.stays, "Done brought typed changes back, and Use This hasn't saved them")
+
+        showing.on = true
+        page.settle()
+        showing.on = false
+        page.settle()
+        #expect(ui.stays, "opening Edit and cancelling keeps the earlier changes held")
+    }
+
+    // Without the check by object, the page stays on the drive that went and the new one is never read.
+    @Test func `Another drive back at the same path is read in place of the one that went`() async {
+        let w = Bench()
+        var entries: [DriveEntry] = []
+        for client in 0..<6 {
+            for shoot in 1...4 {
+                let root = "Clients/Client \(client)/\(String(format: "%02d", shoot)).10.26 Shoot"
+                entries += [root, root + "/Footage", root + "/Project"].map { DriveEntry(path: $0, isDir: true, size: 0, mtime: 0) }
+            }
+        }
+        let found = LayoutLearner.learn(entries: entries)
+        #expect(found.map { !LayoutLearner.clients(in: $0, entries: entries).isEmpty } == true, "there are clients to find")
+        let first = staged(w)
+        first.install(index: DriveIndex(entries: []))
+        w.model.drives = [first]
+        let page = Shown(SetupHost(start: first) {}, model: w.model)
+        defer { page.close() }
+        let second = staged(w)
+        second.install(index: DriveIndex(entries: entries))
+        #expect(first.id == second.id, "same mount path")
+        w.model.drives = [second]
+        await w.until("the new drive to be read", 5) { page.settle(0.02); return !second.clients.isEmpty }
     }
 
     @Test func `A drive that turns up during setup is read, and isn't the working drive before Use This`() async {
@@ -1991,8 +2020,15 @@ extension AppModelTests {
 
 @MainActor @Observable private final class Showing { var on = true }
 
-private struct Toggled: View {
+@MainActor @Observable private final class HeldLayout {
+    var setup: DriveSetup
+    init(_ setup: DriveSetup) { self.setup = setup }
+}
+
+private struct HeldEditor: View {
     let showing: Showing
-    @State var setup: DriveSetup
-    var body: some View { if showing.on { SetupEditor(setup: $setup) {} } }
+    let held: HeldLayout
+    var body: some View {
+        if showing.on { SetupEditor(setup: Binding(get: { held.setup }, set: { held.setup = $0 })) {} }
+    }
 }

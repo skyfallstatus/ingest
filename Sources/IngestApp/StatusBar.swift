@@ -244,7 +244,6 @@ struct WidgetSpot: Equatable {
         ui.page = nil
         ui.feedback = nil
         ui.setup = nil
-        ui.editingLayout = false
         panel.orderOut(nil)
         item.button?.highlight(false)
     }

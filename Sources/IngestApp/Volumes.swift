@@ -109,8 +109,8 @@ final class VolumeWatcher: @unchecked Sendable {
         let url = URL(fileURLWithPath: path, isDirectory: true)
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileIdentifierKey, .volumeUUIDStringKey, .volumeTotalCapacityKey, .volumeIsReadOnlyKey,
                                          .volumeIsInternalKey, .volumeIsLocalKey]
-        guard let v = try? url.resourceValues(forKeys: keys), v.isDirectory == true, v.volumeIsLocal == true, v.volumeIsInternal == true,
-              let id = v.fileIdentifier else { return nil }
+        guard let v = try? url.resourceValues(forKeys: keys), v.isDirectory == true, v.volumeIsLocal == true,
+              v.volumeIsInternal == true || FolderCheck.onStartupDisk(path), let id = v.fileIdentifier else { return nil }
         var fs = statfs()
         guard statfs(path, &fs) == 0 else { return nil }
         let type = withUnsafeBytes(of: fs.f_fstypename) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
@@ -183,11 +183,33 @@ enum FolderCheck {
 
     private static func inside(_ path: String, _ folder: String) -> Bool { path == folder || path.hasPrefix(folder + "/") }
 
+    /// On the disk the Mac started from, its system or its data. That's the Mac's own disk, and keeps the Mac's 20 GB,
+    /// even when macOS calls it external, as it does for a Mac started from an external disk.
+    static func onStartupDisk(_ path: String) -> Bool {
+        func device(_ p: String) -> dev_t? { var st = stat(); return stat(p, &st) == 0 ? st.st_dev : nil }
+        guard let d = device(path) else { return false }
+        return d == device("/") || d == device("/System/Volumes/Data")
+    }
+
+    /// Folders macOS empties by itself. Only a test, or the self-test, may put copies there, and only in its own folder.
+    private static func isTemporary(_ path: String) -> Bool {
+        guard ["/tmp", "/var", "/private/tmp", "/private/var"].contains(where: { inside(path, $0) }) else { return false }
+        let env = ProcessInfo.processInfo.environment
+        let own = [env["INGEST_TEST_SCRATCH"]].compactMap { $0 }.map(real)
+            + (env["INGEST_ONLY_VOLUMES"] == nil ? [] : (env["INGEST_ONLY_FOLDERS"] ?? "").split(separator: ":").map { real(String($0)) })
+        return !own.contains { !$0.isEmpty && inside(path, $0) }
+    }
+
     /// What's wrong with this place, from its path alone. Cheap enough for every look at the volumes.
     static func placeProblem(_ path: String) -> String? {
         let home = home
         if path == "/" { return "That's the whole disk. Choose a folder on it." }
-        if inside(path, "/Volumes") { return "That folder isn't on this Mac." }
+        if path == "/Volumes" { return "That's a folder macOS uses. Choose another folder." }
+        if inside(path, "/Volumes") {      // only an internal disk gets this far: a drive that plugs in is named before this
+            let disk = path.split(separator: "/")[1]
+            return "That's on \(disk), another disk in this Mac. To copy there, use It's a Drive on \(disk)."
+        }
+        if isTemporary(path) { return "That's a temporary folder, which macOS empties. Choose another folder." }
         if path == home { return "That's your home folder. Choose a folder inside it, like Movies." }
         if inside(path, home + "/Library/Mobile Documents") { return "That folder is in iCloud Drive. Choose one that stays on this Mac." }
         if inside(path, home + "/Library/CloudStorage") { return "That folder syncs to the cloud. Choose one that stays on this Mac." }
@@ -211,7 +233,7 @@ enum FolderCheck {
               v.isDirectory == true else { return "That isn't a folder Ingest can open." }
         if v.volumeIsLocal != true { return "That folder isn't on this Mac." }
         if v.isUbiquitousItem == true { return "That folder is in iCloud Drive. Choose one that stays on this Mac." }
-        if v.volumeIsInternal != true {
+        if v.volumeIsInternal != true && !onStartupDisk(path) {
             let root = v.volume.map { real($0.path) }
             if let d = drives.first(where: { real($0.path) == root }) { return "That's on \(d.name). Choose \(d.name) in the list instead." }
             if let c = cards.first(where: { real($0.path) == root }) { return "That folder is on \(c.name)." }

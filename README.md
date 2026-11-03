@@ -110,7 +110,7 @@ If you shoot on something marked "Documents only", you'd be a big help: tell us 
 
 </details>
 
-Your working drive can be exFAT, APFS or HFS+. FAT32 works too, up to 4 GB a file. It can also be a folder on this Mac, outside Desktop, Documents, Downloads and iCloud. On the Mac's own disk Ingest always leaves 20 GB free, so macOS keeps working: a copy that needs more is refused, and one that runs into it stops.
+Your working drive can be exFAT, APFS or HFS+. FAT32 works too, up to 4 GB a file. It can also be a folder on this Mac, outside Desktop, Documents, Downloads, iCloud and temporary folders. On the Mac's own disk Ingest always leaves 20 GB free, so macOS keeps working: a copy that needs more is refused, and one that runs into it stops.
 
 ## Updates and privacy
 

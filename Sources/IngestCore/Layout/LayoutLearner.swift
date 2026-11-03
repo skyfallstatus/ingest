@@ -518,17 +518,17 @@ struct LayoutAnalysis {
         struct Deviation { var shoots: [Shoot]; var singular: String; var plural: String }
         func extra(_ slot: Slot) -> Deviation {
             let name = slot.name
-            return Deviation(shoots: slot.shoots.sorted().map { members[$0] },
-                             singular: "also has a folder called \(name)", plural: "also have a folder called \(name)")
+            let folder = (name.lowercased().first.map("aeiou".contains) == true ? "an " : "a ") + name + " folder"
+            return Deviation(shoots: slot.shoots.sorted().map { members[$0] }, singular: "also has \(folder)", plural: "also have \(folder)")
         }
 
         // Reasons a shoot does not follow come first, because that is the gap the headline shows.
         var reasons = competing.map(extra)
         if !elsewhere.isEmpty {
-            reasons.append(Deviation(shoots: elsewhere, singular: "sits elsewhere on the drive", plural: "sit elsewhere on the drive"))
+            reasons.append(Deviation(shoots: elsewhere, singular: "sits elsewhere", plural: "sit elsewhere"))
         }
         if !thin.isEmpty {
-            reasons.append(Deviation(shoots: thin, singular: "is missing most of these folders", plural: "are missing most of these folders"))
+            reasons.append(Deviation(shoots: thin, singular: "has fewer folders", plural: "have fewer folders"))
         }
         if reasons.isEmpty {
             reasons = slots.filter { slot in slot.shoots.count >= 2 && !kept.contains { $0.slot === slot } }.map(extra)
@@ -542,9 +542,7 @@ struct LayoutAnalysis {
         let older = top.shoots.allSatisfy { $0.name.day < median }
         let count = top.shoots.count
         let noun = (older ? "older " : "") + (count == 1 ? "shoot" : "shoots")
-        return count == 1
-            ? "1 \(noun) \(top.singular). Nothing in it moves."
-            : "\(count) \(noun) \(top.plural). Nothing in them moves."
+        return "\(count) \(noun) \(count == 1 ? top.singular : top.plural) and won't be moved."
     }
 }
 

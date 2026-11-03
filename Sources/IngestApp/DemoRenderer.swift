@@ -17,7 +17,7 @@ import SwiftUI
                            InnerFolder(name: "Footage", role: .footage), InnerFolder(name: "Project", role: .project)],
                    footage: .perCamera,
                    learned: LearnedStats(foldersRead: 212, shootsFound: 38, shootsFollowing: 33,
-                                         exception: "5 older shoots also have a folder called Video. Nothing in them moves.",
+                                         exception: "5 older shoots also have a Video folder and won't be moved.",
                                          mostRecentClient: "Tidemark Rowing Club", mostRecentDay: CalendarDay(year: 2026, month: 10, day: 19)))
     }
 

@@ -41,7 +41,7 @@ public struct LearnedStats: Codable, Hashable, Sendable {
     public var foldersRead: Int
     public var shootsFound: Int
     public var shootsFollowing: Int
-    public var exception: String?       // "5 older shoots also have a folder called Video. Nothing in them moves."
+    public var exception: String?       // "5 older shoots also have a Video folder and won't be moved."
     public var mostRecentClient: String?
     public var mostRecentDay: CalendarDay?
     public init(foldersRead: Int, shootsFound: Int, shootsFollowing: Int, exception: String? = nil,
@@ -59,6 +59,11 @@ public struct DriveSetup: Codable, Hashable, Sendable {
     public var learned: LearnedStats?   // nil for presets
     public init(path: [PathLevel], shootName: ShootNameStyle, inner: [InnerFolder], footage: FootageStyle, learned: LearnedStats? = nil) {
         self.path = path; self.shootName = shootName; self.inner = inner; self.footage = footage; self.learned = learned
+    }
+
+    /// The same folders, whatever was counted the day each was learned.
+    public func sameLayout(as other: DriveSetup) -> Bool {
+        path == other.path && shootName == other.shootName && inner == other.inner && footage == other.footage
     }
 
     /// A setup is a file on a drive, or text someone typed, so every level has to be one folder name that stays on it.

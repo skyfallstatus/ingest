@@ -1767,6 +1767,51 @@ extension AppModelTests {
 
     private var layout: DriveSetup { ShootPlanner.presets()[0].setup }
 
+    @Test func `Setup's foot says what the layout on screen is`() throws {
+        var found = layout
+        found.learned = LearnedStats(foldersRead: 9, shootsFound: 8, shootsFollowing: 8)
+        var differ = found
+        differ.learned?.exception = "2 shoots sit elsewhere and won't be moved."
+        var other = ShootPlanner.presets()[1].setup
+        #expect(!other.sameLayout(as: found))
+        let foot = { (setup: DriveSetup, learned: DriveSetup?, saved: DriveSetup?) -> [String] in
+            let line = SetupView.foot(showing: setup, learned: learned, saved: saved, drive: "Field SSD")
+            return [line.title, line.sentence]
+        }
+        #expect(foot(differ, differ, nil) == ["Layout found", "2 shoots sit elsewhere and won't be moved."])
+        #expect(foot(found, found, nil) == ["Layout found", "New shoots follow it."])
+        #expect(foot(other, found, other) == ["Current layout", "New shoots follow it."])
+        #expect(foot(other, nil, other) == ["Current layout", "New shoots follow it."])
+        #expect(foot(other, found, nil) == ["A different layout", "Only new shoots use it. Nothing on Field SSD moves."])
+        #expect(foot(found, nil, other) == ["A different layout", "Only new shoots use it. Nothing on Field SSD moves."])
+        #expect(foot(found, nil, nil) == ["Choose a layout", "No shoots found on Field SSD."])
+
+        // setup.json keeps the words of the day it was saved. What's said is what was read just now.
+        var saved = found
+        saved.learned?.exception = "5 older shoots also have a folder called Video. Nothing in them moves."
+        #expect(foot(saved, differ, saved)[1] == "2 shoots sit elsewhere and won't be moved.")
+        other.learned = saved.learned
+        #expect(foot(other, nil, other)[1] == "New shoots follow it.")
+    }
+
+    @Test func `Also names what isn't the footage folder, or nothing`() {
+        let inner = [InnerFolder(name: "01 ORIGINALS", role: .footage), InnerFolder(name: "02 ASSETS", role: .plain, children: [InnerFolder(name: "Logos", role: .plain)]), InnerFolder(name: "03 PREMIERE", role: .project)]
+        var setup = DriveSetup(path: [.client], shootName: ShootNameStyle(), inner: inner, footage: .perCard(prefix: "CARD "))
+        #expect(SetupView.also(setup) == "Also: 02 ASSETS (Logos), 03 PREMIERE")
+        setup.inner = [inner[0]]
+        #expect(SetupView.also(setup) == nil)
+    }
+
+    @Test func `An edit drops figures counted for the old layout, and only an edit`() {
+        var learned = layout
+        learned.learned = LearnedStats(foldersRead: 9, shootsFound: 8, shootsFollowing: 8, exception: "x")
+        #expect(SetupEditor.edited(learned, from: learned) == learned, "Done with nothing changed")
+        var changed = learned
+        changed.path = [.literal("Elsewhere"), .client]
+        #expect(SetupEditor.edited(changed, from: learned).learned == nil)
+        #expect(SetupEditor.edited(changed, from: learned).path == changed.path)
+    }
+
     @Test func `Each menu control answers a click all the way across, not only somewhere in it`() throws {
         let w = Bench()
         let head = Shown(SheetHead(title: "No card"), model: w.model)

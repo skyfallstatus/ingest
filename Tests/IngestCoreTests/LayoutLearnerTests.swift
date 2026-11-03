@@ -39,7 +39,7 @@ struct LayoutLearnerTests {
         let stats = try #require(setup.learned)
         #expect(stats.shootsFound == 34)
         #expect(stats.shootsFollowing == 29)
-        #expect(stats.exception == "5 older shoots also have a folder called Video. Nothing in them moves.")
+        #expect(stats.exception == "5 older shoots also have a Video folder and won't be moved.")
         #expect(stats.mostRecentDay?.year == 2026)
     }
 
@@ -49,7 +49,7 @@ struct LayoutLearnerTests {
         let stats = try #require(setup.learned)
         #expect(stats.shootsFound == 34)
         #expect(stats.shootsFollowing == 29)
-        #expect(stats.exception == "5 older shoots also have a folder called Video. Nothing in them moves.")
+        #expect(stats.exception == "5 older shoots also have a Video folder and won't be moved.")
         #expect(setup.inner.map(\.name) == ["Photo", "Footage", "Project"])
     }
 
@@ -379,7 +379,50 @@ struct LayoutLearnerTests {
         }
         let stats = try #require(LayoutLearner.learn(entries: drive.entries)?.learned)
         #expect(stats.shootsFollowing == 8)
-        #expect(stats.exception == "2 older shoots also have a folder called Camera Reports. Nothing in them moves.")
+        #expect(stats.exception == "2 older shoots also have a Camera Reports folder and won't be moved.")
+    }
+
+    /// Ten shoots built one way, with a last word on some of them.
+    private func exception(_ change: (inout FakeDrive) -> Void, _ skip: Set<Int> = []) -> String? {
+        var drive = FakeDrive()
+        for index in 0..<10 where !skip.contains(index) {
+            let shoot = "Client \(index % 2)/2026-\(String(format: "%02d", index + 1))-10 Job"
+            for inner in ["Footage/a.mov", "Photo/b.jpg", "Sound/c.wav", "Project/d.prproj"] { drive.file("\(shoot)/\(inner)", size: 2_000_000_000) }
+        }
+        change(&drive)
+        return LayoutLearner.learn(entries: drive.entries)?.learned?.exception
+    }
+
+    @Test("The exception says what's different and that it stays put, for one shoot or several")
+    func exceptionWords() {
+        #expect(exception({ $0.file("Client 0/2026-01-10 Job/Video/a.mov", size: 2_000_000_000) }) == "1 older shoot also has a Video folder and won't be moved.")
+        let thin: (inout FakeDrive) -> Void = { d in
+            for n in [11, 12] { d.file("Client 0/2026-\(n)-10 Job/Project/a.prproj") }
+        }
+        #expect(exception(thin) == "2 shoots have fewer folders and won't be moved.")
+        #expect(exception({ $0.file("Client 0/2026-12-10 Job/Project/a.prproj") }) == "1 shoot has fewer folders and won't be moved.")
+        let away: (inout FakeDrive) -> Void = { d in
+            for n in [11, 12] { d.file("Old/Things/Kept/2026-\(n)-10 Job/Footage/a.mov", size: 2_000_000_000) }
+        }
+        #expect(exception(away) == "2 shoots sit elsewhere and won't be moved.")
+        #expect(exception({ $0.file("Old/Things/Kept/2026-12-10 Job/Footage/a.mov", size: 2_000_000_000) }) == "1 shoot sits elsewhere and won't be moved.")
+    }
+
+    @Test("Two setups can be the same layout whatever was counted")
+    func sameLayout() throws {
+        let setup = try #require(LayoutLearner.learn(entries: sampleDrive().entries))
+        var recounted = setup
+        recounted.learned?.shootsFound = 99
+        #expect(recounted != setup && recounted.sameLayout(as: setup))
+        var plain = setup
+        plain.learned = nil
+        #expect(plain.sameLayout(as: setup))
+        var moved = setup
+        moved.inner.removeLast()
+        #expect(!moved.sameLayout(as: setup))
+        var byCard = setup
+        byCard.footage = .perCard(prefix: "CARD ")
+        #expect(!byCard.sameLayout(as: setup))
     }
 
     @Test("Folders only, no files: the layout still reads")

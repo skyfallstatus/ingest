@@ -120,7 +120,7 @@ struct ReadingDrive: View {
             VStack(alignment: .leading, spacing: 0) {
                 SetupLine(label: "Folders read", value: String(drive.foldersRead), mark: .running)
                 SetupLine(label: "Shoots found", value: "", mark: .waiting)
-                SetupLine(label: "Built the same way", value: "", mark: .waiting)
+                SetupLine(label: "Match this layout", value: "", mark: .waiting)
             }
             .padding(.horizontal, Grid.side).padding(.bottom, 9)
             Foot(bottom: BottomLine(kind: .idle, title: "Reading \(drive.name)", sentence: "Nothing on it changes.")) { EmptyView() }
@@ -144,7 +144,8 @@ struct SetupView: View {
         _setup = State(initialValue: saved ?? learned ?? ShootPlanner.presets().first?.setup ?? DriveSetup(path: [.client], shootName: ShootNameStyle(), inner: [InnerFolder(name: "Footage", role: .footage)], footage: .perCamera))
     }
 
-    private var stats: LearnedStats? { setup.learned ?? learned?.learned }
+    /// What's on the drive now. A saved setup's figures are from the day it was saved.
+    private var stats: LearnedStats? { learned?.learned }
 
     /// "Clients / Client / Date Shoot / Footage / Camera / Card", with what changes in the heavier weight.
     private var pattern: Text {
@@ -161,37 +162,21 @@ struct SetupView: View {
         }
         add(setup.shootName.position == .prefix ? "Date Shoot" : "Shoot Date", bold: true)
         add(setup.inner.first { $0.role == .footage }?.name ?? "Footage", bold: false)
-        if case .perCamera = setup.footage { add("Camera", bold: true) }
-        var card = Text("Card").fontWeight(.semibold).foregroundColor(.ink)
-        if case .perCard(let prefix) = setup.footage { card = Text(prefix).foregroundColor(.ink2) + card }
-        return out + card
+        switch setup.footage {
+        case .perCamera:
+            add("Camera", bold: true)
+            return out + Text("Card").fontWeight(.semibold).foregroundColor(.ink)
+        case .perCard(let prefix):
+            return out + Text(prefix).foregroundColor(.ink2) + Text("01").fontWeight(.semibold).foregroundColor(.ink)
+        }
     }
 
-    /// A real shoot of this client's, from the most recent day, when the drive has one.
-    private var example: String {
-        let client = setup.learned?.mostRecentClient ?? drive.clients.first?.name ?? "Client name"
-        let day = setup.learned?.mostRecentDay ?? CalendarDay(Date())
-        let date = ShootPlanner.shootFolderName(setup: setup, shootName: "", day: day)
-        var shoot = ShootPlanner.shootFolderName(setup: setup, shootName: "Shoot name", day: day)
-        if let root = drive.clients.first(where: { $0.name == client })?.path, let index = drive.index,
-           let hit = index.entries.first(where: { $0.isDir && ($0.path as NSString).deletingLastPathComponent == root && ($0.path as NSString).lastPathComponent.contains(date) }) {
-            shoot = (hit.path as NSString).lastPathComponent
-        }
-        var parts: [String] = setup.path.map { level in
-            switch level {
-            case .year: String(day.year)
-            case .literal(let s): s
-            case .client: client
-            }
-        }
-        parts.append(shoot)
-        parts.append(setup.inner.first { $0.role == .footage }?.name ?? "Footage")
-        if case .perCamera = setup.footage { parts.append(model.cameraMemory.values.map(\.folder).sorted().first ?? "Camera") }
-        return parts.joined(separator: " / ")
-    }
-
-    private var inside: String {
-        "Inside each shoot: " + setup.inner.map { f in
+    /// What else is in each shoot. The footage folder is in the line above.
+    static func also(_ setup: DriveSetup) -> String? {
+        var rest = setup.inner
+        if let footage = rest.firstIndex(where: { $0.role == .footage }) { rest.remove(at: footage) }
+        guard !rest.isEmpty else { return nil }
+        return "Also: " + rest.map { f in
             f.children.isEmpty ? f.name : f.name + " (" + f.children.map(\.name).joined(separator: ", ") + ")"
         }.joined(separator: ", ")
     }
@@ -206,16 +191,14 @@ struct SetupView: View {
             VStack(alignment: .leading, spacing: 0) {
                 SetupLine(label: "Folders read", value: String(stats?.foldersRead ?? drive.foldersRead))
                 SetupLine(label: "Shoots found", value: String(stats?.shootsFound ?? 0))
-                if let s = stats { SetupLine(label: "Built the same way", value: String(s.shootsFollowing)) }
+                if let s = stats, let learned, setup.sameLayout(as: learned) { SetupLine(label: "Match this layout", value: String(s.shootsFollowing)) }
                 VStack(alignment: .leading, spacing: 3) {
                     pattern.lineLimit(3).fixedSize(horizontal: false, vertical: true)
-                    Group {
-                        Text(example).lineLimit(2).truncationMode(.middle).fixedSize(horizontal: false, vertical: true)
-                        Text(inside).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    if let also = Self.also(setup) {
+                        Text(also).foregroundStyle(Color.ink2).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     }
-                    .font(.small12).foregroundStyle(Color.ink2)
                 }
-                .font(.body13)
+                .font(.small12)
                 .padding(.leading, Grid.text).padding(.top, 5)
                 Text("Change Layout…").font(.small12).foregroundStyle(Color.ink2).underline(color: Color.ink2.opacity(0.35))
                     .overlay { PullDown(spoken: "Change the folder layout: a preset, or edit it", entries: { choices }) }
@@ -235,17 +218,24 @@ struct SetupView: View {
     private var choices: [PullDown.Entry] {
         var out: [PullDown.Entry] = [.header("Presets")]
         out += ShootPlanner.presets().map { p in .item(p.name) { setup = p.setup } }
-        if let learned { out.append(.item("What I learned from \(drive.name)") { setup = learned }) }
+        if let learned { out.append(.item("Layout found on \(drive.name)") { setup = learned }) }
         out += [.separator, .item("Edit…") { editing = true }]
         return out
     }
 
     private var footLine: BottomLine {
-        if let saveError { return BottomLine(kind: .idle, title: "That didn't save", sentence: saveError) }
-        if stats == nil || stats?.shootsFound == 0 {
-            return BottomLine(kind: .idle, title: "How should it be organised?", sentence: "No shoots on it yet. This is a starting point.")
-        }
-        return BottomLine(kind: .idle, title: "This is how you work", sentence: setup.learned?.exception ?? "The next shoot goes the same way.")
+        if let saveError { return BottomLine(kind: .idle, title: "Couldn't save the layout", sentence: saveError) }
+        return Self.foot(showing: setup, learned: learned, saved: drive.setup, drive: drive.name)
+    }
+
+    /// What the layout on screen is, next to what's on the drive. The exception comes from this read of the drive: a saved
+    /// setup holds the words of the day it was saved.
+    static func foot(showing setup: DriveSetup, learned: DriveSetup?, saved: DriveSetup?, drive: String) -> BottomLine {
+        func line(_ title: String, _ sentence: String) -> BottomLine { BottomLine(kind: .idle, title: title, sentence: sentence) }
+        if let learned, setup.sameLayout(as: learned) { return line("Layout found", learned.learned?.exception ?? "New shoots follow it.") }
+        if let saved, setup.sameLayout(as: saved) { return line("Current layout", "New shoots follow it.") }
+        if learned == nil, saved == nil { return line("Choose a layout", "No shoots found on \(drive).") }
+        return line("A different layout", "Only new shoots use it. Nothing on \(drive) moves.")
     }
 }
 
@@ -388,6 +378,14 @@ struct SetupEditor: View {
             if !top.contains(where: { $0.role == .footage }), let i = top.firstIndex(where: { $0.role == .plain }) { top[i].role = .footage }
             setup.inner = top
         }
-        target = setup
+        target = Self.edited(setup, from: target)
+    }
+
+    /// A changed layout isn't the one the figures were counted for any more. Nothing changed, nothing to drop.
+    static func edited(_ setup: DriveSetup, from original: DriveSetup) -> DriveSetup {
+        guard !setup.sameLayout(as: original) else { return original }
+        var out = setup
+        out.learned = nil
+        return out
     }
 }

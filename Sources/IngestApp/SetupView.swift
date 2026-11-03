@@ -13,9 +13,9 @@ struct SetupHost: View {
     @State private var learned: DriveSetup??
     let close: () -> Void
 
-    /// With `choosing`, the first page opens with `start` ticked. Without, setup goes straight to `start`'s layout.
-    init(start: DriveState?, choosing: Bool = false, close: @escaping () -> Void) {
-        _drive = State(initialValue: choosing ? nil : start)
+    /// With `start`, setup goes straight to its layout, and Change Drive… comes back here with it ticked.
+    init(start: DriveState?, close: @escaping () -> Void) {
+        _drive = State(initialValue: start)
         _choice = State(initialValue: start)
         _folder = State(initialValue: start?.volume.isFolder == true ? start : nil)
         _touched = State(initialValue: start != nil)

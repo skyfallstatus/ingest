@@ -1716,7 +1716,7 @@ extension AppModelTests {
 
     init<V: View>(_ view: V, model: AppModel, ui: PanelUI? = nil, settling: TimeInterval = 0.15) {
         _ = NSApplication.shared
-        host = NSHostingView(rootView: view.frame(width: Grid.width).environment(model).environment(ui ?? PanelUI()))
+        host = FirstClickHostingView(rootView: view.frame(width: Grid.width).environment(model).environment(ui ?? PanelUI()))
         window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: Grid.width, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
         window.alphaValue = 0
         window.ignoresMouseEvents = true
@@ -1727,6 +1727,15 @@ extension AppModelTests {
 
     func settle(_ seconds: TimeInterval = 0.15) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
     func close() { window.orderOut(nil) }
+
+    /// A real click, measured in from the page's top right corner. This window can't take the keyboard from anyone.
+    func click(right: CGFloat, top: CGFloat) {
+        let at = NSPoint(x: host.bounds.width - right, y: host.bounds.height - top)
+        for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            if let e = NSEvent.mouseEvent(with: kind, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                          context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { window.sendEvent(e) }
+        }
+    }
     var buttons: [IngestApp.PullDownButton] { pullDowns(in: host) }
 
     /// What a click at the left, the middle and the right of `b` lands on.
@@ -1826,6 +1835,19 @@ extension AppModelTests {
         #expect(abs(change.frame.width - words) <= 3, "\(change.frame) over words \(words) wide")
         for (page, button) in [(head, more), (form, chevron), (setup, change)] {
             #expect(page.hits(button).allSatisfy { $0 === button }, "\(page.hits(button))")
+        }
+    }
+
+    // The head's control takes no height of its own, which mustn't cost it its clicks.
+    @Test func `The ✕ takes a click on its glyph and at the edge of its target`() async {
+        let w = Bench()
+        var closed = 0
+        let page = Shown(SheetHead(title: "Field SSD", close: { closed += 1 }), model: w.model)
+        defer { page.close() }
+        for (right, top) in [(CGFloat(20), CGFloat(22)), (30, 22), (20, 13)] {
+            let before = closed
+            page.click(right: right, top: top)
+            await w.until("the click at \(right), \(top)", 2) { closed > before }
         }
     }
 

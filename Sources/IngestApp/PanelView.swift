@@ -130,19 +130,30 @@ struct SheetHead: View {
     var first = true        // one quiet control, however many cards are in
     var close: (() -> Void)? = nil      // takes that control's place in setup
 
+    /// How far above the title's baseline a control's middle sits: halfway up its capitals.
+    private static let capMiddle = (NSFont.systemFont(ofSize: 15, weight: .semibold).capHeight / 2).rounded(.up)
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text(title).font(.reel).kerning(-0.18).lineLimit(1).accessibilityAddTraits(.isHeader)
             if let detail { Text(detail).font(.small12).monospacedDigit().foregroundStyle(Color.ink2).lineLimit(1) }
             Spacer(minLength: 0)
             if let close {
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
-                    .buttonStyle(IconStyle(tint: .ink3)).accessibilityLabel("Close")
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            } else if first { MoreMenu().alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 } }
+                placed(Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(IconStyle(tint: .ink3)).accessibilityLabel("Close"), inkAt: 2.5)
+            } else if first { placed(MoreMenu(), inkAt: 1.5) }
         }
         .padding(.top, 13).padding(.bottom, 3)
         .padding(.leading, Grid.side).padding(.trailing, 12)
+    }
+
+    /// On the title's capitals, with its ink on the value column's edge: `inkAt` is how far that is from where its target would put
+    /// it. It takes no height above the baseline and the row's own below it, so the title and everything under it stay where they are.
+    private func placed(_ control: some View, inkAt: CGFloat) -> some View {
+        control.offset(x: inkAt)
+            .frame(height: 0)
+            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Self.capMiddle }
+            .padding(.bottom, Self.capMiddle + 6)
     }
 }
 

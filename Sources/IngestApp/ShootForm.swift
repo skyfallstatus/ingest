@@ -327,7 +327,7 @@ struct ShootForm: View {
 
     @ViewBuilder private var links: some View {
         if let newFolderNote {
-            Text(newFolderNote).font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true)
+            Text(newFolderNote).font(.small12).foregroundStyle(Color.ink2).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 9)
         }
         HStack(spacing: 14) {
             // A reused card may hold a new shoot, so the fields above stay on offer beside this.

@@ -16,6 +16,7 @@ struct LibraryView: View {
             HStack(spacing: 2) {
                 Button { ui.page = nil } label: { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
                     .buttonStyle(IconStyle()).accessibilityLabel("Back to the card")
+                    .offset(x: 0.5)     // its ink on the text column below
                 ForEach(Page.allCases) { p in
                     Button(p.rawValue) { ui.page = p }.buttonStyle(TabStyle(selected: page == p))
                         .accessibilityAddTraits(page == p ? .isSelected : [])

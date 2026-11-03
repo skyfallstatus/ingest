@@ -230,7 +230,7 @@ extension View {
     func textBox() -> some View {
         let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         return scrollContentBackground(.hidden)
-            .padding(.horizontal, 5).padding(.vertical, 6)
+            .padding(.horizontal, 4).padding(.vertical, 6)
             .background(shape.fill(Color.foot))
             .overlay(shape.strokeBorder(Color.line, lineWidth: 0.5))
     }

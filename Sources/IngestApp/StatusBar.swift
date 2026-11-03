@@ -69,6 +69,7 @@ struct WidgetSpot: Equatable {
     /// True for a widget that opened by itself and hasn't been touched: it stays until told otherwise.
     private(set) var openedByItself = false
     var holdOpen = false
+    var focusBack: NSRunningApplication?    // the app in front before a folder panel brought Ingest forward
     private var spot: WidgetSpot?
     private var height: CGFloat = 200
     private var shrink: DispatchWorkItem?
@@ -246,6 +247,8 @@ struct WidgetSpot: Equatable {
         ui.setup = nil
         panel.orderOut(nil)
         item.button?.highlight(false)
+        // Only if Ingest still has the keyboard: someone who clicked into another app meant that one.
+        if let back = focusBack { focusBack = nil; if NSApp.isActive, !back.isTerminated { back.activate() } }
     }
 
     private func escape() {

@@ -18,7 +18,7 @@ import IngestCore
         panel.message = "Choose where \(card.name) goes on \(drive.name). The card is kept whole, in its own folder."
         bar?.holdOpen = true
         defer { bar?.holdOpen = false }
-        NSApp.activate(ignoringOtherApps: true)
+        borrowFocus()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard url.path == drive.path || url.path.hasPrefix(drive.path + "/") else {
             card.error = "That folder isn't on \(drive.name)."
@@ -44,9 +44,16 @@ import IngestCore
             bar?.holdOpen = false
             bar?.panel.makeKeyAndOrderFront(nil)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        borrowFocus()
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url.path
+    }
+
+    /// A panel needs Ingest in front. The app that was there gets the keyboard back when the widget closes, as it does
+    /// whenever the widget closes without having been activated.
+    private func borrowFocus() {
+        if !NSApp.isActive, let front = NSWorkspace.shared.frontmostApplication, front != NSRunningApplication.current { bar?.focusBack = front }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func mayQuit(model: AppModel) -> Bool {

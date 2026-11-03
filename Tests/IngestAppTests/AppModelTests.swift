@@ -1844,6 +1844,40 @@ extension AppModelTests {
         #expect(!ui.editingLayout)
     }
 
+    @Test func `A drive that turns up during setup is read, and isn't the working drive before Use This`() async {
+        let w = Bench()
+        let page = Shown(SetupHost(start: nil) {}, model: w.model)
+        defer { page.close() }
+        w.plugged.now = [(w.driveA, .drive)]
+        await w.model.refresh()
+        await w.until("the drive to be read") { page.settle(); return w.drive(w.driveA).index != nil && !w.drive(w.driveA).isScanning }
+        page.settle()
+        #expect(w.model.workingDrive == nil && w.model.stores.workingDriveKey == nil)
+        #expect(w.model.accept(setup: layout, for: w.drive(w.driveA)) == nil)
+        #expect(w.model.workingDrive === w.drive(w.driveA))
+    }
+
+    // Big enough that the learner is still going when the drive goes, which is the only way into this.
+    @Test func `A drive pulled while it's being read can't seed the page`() async {
+        let w = Bench()
+        var entries: [DriveEntry] = []
+        for client in 0..<400 {
+            for shoot in 1...25 {
+                let root = "Clients/Client \(client)/\(String(format: "%02d", shoot)).10.26 Shoot"
+                entries += [root, root + "/Footage", root + "/Project"].map { DriveEntry(path: $0, isDir: true, size: 0, mtime: 0) }
+            }
+        }
+        let drive = staged(w)
+        drive.install(index: DriveIndex(entries: entries))
+        w.model.drives = [drive]
+        let page = Shown(SetupHost(start: drive) {}, model: w.model, settling: 0.02)
+        defer { page.close() }
+        w.model.drives = []
+        page.settle()
+        try? await Task.sleep(for: .seconds(2))
+        #expect(LayoutLearner.learn(entries: entries) != nil, "there was something to learn")
+        #expect(drive.clients.isEmpty)
+    }
 }
 
 @MainActor @Observable private final class Showing { var on = true }

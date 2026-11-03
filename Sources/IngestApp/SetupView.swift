@@ -24,11 +24,12 @@ struct SetupHost: View {
         .task(id: drive?.id) { read() }
         .onChange(of: model.drives.map(\.id)) { _, _ in
             if let d = drive, !model.drives.contains(where: { $0 === d }) { drive = nil; learned = nil }
-            else if drive == nil, model.drives.count == 1 { pick(model.drives[0]) }
+            else if drive == nil, model.drives.count == 1 { drive = model.drives[0] }
         }
-        .onAppear { if drive == nil, model.drives.count == 1 { pick(model.drives[0]) } }
+        .onAppear { if drive == nil, model.drives.count == 1 { drive = model.drives[0] } }
     }
 
+    /// A drive that only turned up is read but not used: it could be camera media, so it takes Use This to make it the working drive.
     private func pick(_ d: DriveState) {
         if model.workingDrive !== d, !model.isCopying { model.use(drive: d) }
         drive = d
@@ -46,6 +47,7 @@ struct SetupHost: View {
         let entries = drive.index?.entries ?? []
         Task {
             let found = await Task.detached(priority: .userInitiated) { LayoutLearner.learn(entries: entries) }.value
+            guard self.drive === drive else { return }      // pulled while it was being read
             if drive.setup == nil, let found, let index = drive.index { drive.clients = LayoutLearner.clients(in: found, entries: index.entries) }
             learned = .some(found)
         }

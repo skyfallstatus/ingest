@@ -2016,6 +2016,88 @@ extension AppModelTests {
         #expect(LayoutLearner.learn(entries: entries) != nil, "there was something to learn")
         #expect(drive.clients.isEmpty)
     }
+
+    // MARK: A folder on this Mac
+
+    private func bookmark(_ path: String) throws -> Data {
+        try URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    @Test func `A folder keeps its key through a rename, and a new folder in its place is another drive`() throws {
+        let parent = temp(), path = parent + "/Footage"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        let mark = try bookmark(path)
+        let first = try #require(VolumeWatcher.folders([mark]).first)
+        #expect(first.isFolder && first.name == "Footage" && first.key.hasPrefix("folder|"))
+        try FileManager.default.moveItem(atPath: path, toPath: parent + "/Shoots")
+        let moved = try #require(VolumeWatcher.folders([mark]).first, "the bookmark follows it")
+        #expect(moved.key == first.key && moved.name == "Shoots")
+        #expect(first.anchor?.isCurrent == false, "and what was proved there is over")
+        try FileManager.default.removeItem(atPath: parent + "/Shoots")
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        #expect(VolumeWatcher.folder(at: path)?.key != first.key)
+    }
+
+    @Test func `The self-test's fence keeps out every saved folder it doesn't name`() throws {
+        let path = temp()
+        let mark = try bookmark(path)
+        setenv("INGEST_ONLY_VOLUMES", "NOTHING", 1)
+        defer { unsetenv("INGEST_ONLY_VOLUMES"); unsetenv("INGEST_ONLY_FOLDERS") }
+        #expect(VolumeWatcher.folders([mark]).isEmpty)
+        setenv("INGEST_ONLY_FOLDERS", temp() + ":" + path, 1)
+        #expect(VolumeWatcher.folders([mark]).map(\.path) == [FolderCheck.real(path)])
+    }
+
+    @Test func `A folder is a drive once it's picked, never chosen on its own, and saved only by Use This`() async throws {
+        let w = Bench()
+        defer { w.model.stores.folderBookmarks = []; w.model.stores.workingDriveKey = nil; w.model.stores.workingFolderPath = nil }
+        let path = temp() + "/Footage"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        w.plugged.now = [(w.cardVolume, .card)]
+        await w.model.refresh()
+        let picked = await w.model.pick(folder: path)
+        let d = try #require(picked.drive, "\(picked.problem ?? "")")
+        #expect(d.volume.isFolder && d.volume.isInternal)
+        #expect(w.model.workingDrive == nil, "picking isn't choosing")
+        #expect(w.model.stores.folderBookmarks.isEmpty, "nothing is saved yet")
+        w.model.dropPendingFolder()
+        #expect(!w.model.drives.contains { $0 === d }, "closing setup leaves everything as it was")
+        let again = try #require(await w.model.pick(folder: path).drive)
+        w.model.use(drive: again)
+        #expect(w.model.workingDrive === again)
+        #expect(w.model.stores.folderBookmarks.count == 1)
+        await w.model.refresh()
+        #expect(w.model.drives.contains { $0 === again }, "found again from its bookmark")
+        let c = w.model.cards[0]
+        await w.until("the card to settle") { c.phase == .ready && !c.isMatching }
+        w.model.start(c, destination: Destination(footageRoot: "S"))
+        await w.until("the copy") { c.phase == .finished && !c.isBusy }
+        #expect(c.isSafe(on: again))
+        try FileManager.default.moveItem(atPath: path, toPath: path + " moved")
+        #expect(!c.isSafe(on: again), "a folder moved away takes its proof with it")
+        w.model.forget(folder: again)
+        #expect(w.model.stores.folderBookmarks.isEmpty && w.model.workingDrive == nil)
+        #expect(FileManager.default.fileExists(atPath: path + " moved/S/one.bin"), "forgetting a folder deletes nothing")
+    }
+
+    @Test func `A folder is refused, plainly, wherever copies shouldn't go`() throws {
+        let home = FolderCheck.real(NSHomeDirectory())
+        for path in ["/", home, home + "/Library/Caches/x", home + "/Library/Mobile Documents/com~apple~CloudDocs/Footage",
+                     home + "/Library/CloudStorage/Drive/Footage", home + "/Documents", home + "/Desktop/Footage", home + "/Downloads/x",
+                     "/Applications/Footage", "/System/Footage", "/Library/Footage", "/Volumes", home + "/.Trash/Footage"] {
+            let why = try #require(FolderCheck.placeProblem(path), "\(path)")
+            #expect(why.hasSuffix(".") && !why.contains("\n"), "\(why)")
+        }
+        #expect(FolderCheck.placeProblem(home + "/Movies/Footage") == nil)
+        let drive = temp(), inside = drive + "/Sub/Footage"
+        try FileManager.default.createDirectory(atPath: inside, withIntermediateDirectories: true)
+        #expect(FolderCheck.problem(with: drive, drives: [], cards: []) == nil)
+        try FileManager.default.createDirectory(atPath: drive + "/" + AppInfo.driveFolder, withIntermediateDirectories: true)
+        #expect(FolderCheck.problem(with: drive, drives: [], cards: []) == nil, "a folder that's already a drive can be chosen again")
+        let name = (drive as NSString).lastPathComponent
+        #expect(FolderCheck.problem(with: inside, drives: [], cards: []) == "That folder is inside \(name), where copies already go. Choose \(name) or another folder.")
+        #expect(FolderCheck.problem(with: (drive as NSString).deletingLastPathComponent, drives: [], cards: [])?.hasPrefix("Copies already go to") == true)
+    }
 }
 
 @MainActor @Observable private final class Showing { var on = true }

@@ -30,7 +30,22 @@ public final class MountAnchor: Hashable, @unchecked Sendable {
         guard events >= 0 else { close(fd); return nil }
         self.path = path
     }
-    deinit { close(events); close(fd) }
+    private var watcher: DispatchSourceFileSystemObject?
+    deinit { watcher?.cancel(); close(events); close(fd) }
+
+    /// Calls `ended` when the folder is deleted, renamed, moved or revoked, so whoever shows it can look again at once.
+    /// Asking `isCurrent` is still what counts: this only says when to ask.
+    public func onEnd(_ ended: @escaping @Sendable () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        guard watcher == nil else { return }
+        let own = dup(fd)      // the source has its own descriptor, closed once it's cancelled, whenever that is
+        guard own >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: own, eventMask: [.delete, .rename, .revoke], queue: .global(qos: .utility))
+        source.setEventHandler { ended() }
+        source.setCancelHandler { close(own) }
+        source.resume()
+        watcher = source
+    }
 
     public var isCurrent: Bool {
         lock.lock(); defer { lock.unlock() }

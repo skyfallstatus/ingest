@@ -65,6 +65,39 @@ final class Stores {
         set { d.set(newValue, forKey: "workingDrive") }
     }
 
+    /// Where the working folder was when it was chosen, to say where it was if it goes missing.
+    var workingFolderPath: String? {
+        get { d.string(forKey: "workingFolder") }
+        set { d.set(newValue, forKey: "workingFolder") }
+    }
+
+    /// Folders on this Mac that have been made drives, as plain bookmarks, so a folder that's moved is found where it went.
+    /// Kept beside the history, so the self-test's own support folder holds its own, and none of anyone else's.
+    var folderBookmarks: [Data] {
+        get {
+            guard let data = try? Data(contentsOf: support.appendingPathComponent("folders.plist")) else { return [] }
+            return (try? PropertyListDecoder().decode([Data].self, from: data)) ?? []
+        }
+        set { try? PropertyListEncoder().encode(newValue).write(to: support.appendingPathComponent("folders.plist"), options: .atomic) }
+    }
+
+    func remember(folder path: String) {
+        guard let mark = try? URL(fileURLWithPath: path, isDirectory: true).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+              let key = VolumeWatcher.folder(at: path)?.key else { return }
+        var marks = folderBookmarks.filter { VolumeWatcher.folders([$0]).first?.key != key }
+        marks.append(mark)
+        folderBookmarks = marks
+    }
+
+    /// Forgets a folder. Nothing in it is touched.
+    func forget(folderKey key: String) {
+        folderBookmarks = folderBookmarks.filter { mark in
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: mark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale) else { return true }
+            return VolumeWatcher.folder(at: url.path)?.key != key
+        }
+    }
+
     var cameras: [String: CameraMemory] {
         get { (d.data(forKey: "cameras")).flatMap { try? JSONDecoder().decode([String: CameraMemory].self, from: $0) } ?? [:] }
         set { d.set(try? JSONEncoder().encode(newValue), forKey: "cameras") }

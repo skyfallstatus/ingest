@@ -170,7 +170,8 @@ private func open(on screen: WidgetSpot.Screen, item: CGRect) throws -> WidgetSp
 private struct AnimatedPage: View {
     let room: Room
     var body: some View {
-        TopAlignedScroll(height: room.height, animation: .easeInOut(duration: 0.28)) { Color.red.frame(height: room.height) }
+        // A fixed red: Color.red changes with light and dark.
+        TopAlignedScroll(height: room.height, animation: .easeInOut(duration: 0.28)) { Color(red: 1, green: 0, blue: 0).frame(height: room.height) }
             .frame(width: 100)
             .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -185,7 +186,11 @@ private struct AnimatedPage: View {
         let x = rep.pixelsWide / 2
         var rows: [Int] = []
         for y in 0 ..< rep.pixelsHigh {
-            if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), c.redComponent > 0.7, c.greenComponent < 0.4, c.alphaComponent > 0.5 {
+            // colorAt calls every pixel Generic RGB, whatever profile the bitmap is in: read it in the real one, then compare in sRGB.
+            guard let tagged = rep.colorAt(x: x, y: y) else { continue }
+            var parts = [CGFloat](repeating: 0, count: 4)
+            tagged.getComponents(&parts)
+            if let c = NSColor(colorSpace: rep.colorSpace, components: parts, count: 4).usingColorSpace(.sRGB), c.redComponent > 0.7, c.greenComponent < 0.4, c.alphaComponent > 0.5 {
                 rows.append(Int(CGFloat(y) * scale))
             }
         }
